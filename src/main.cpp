@@ -11,7 +11,7 @@ constexpr int MAX_EVENTS = 64;
 constexpr int BUFFER_SIZE = 1024;
 constexpr const char* PONG_RESPONSE = "+PONG\r\n"; 
 
-// Non-blocking is required for epoll edge-triggered mode.
+// Non-blocking is required for epoll level-triggered mode.
 // If we block on read(), the entire event loop stalls.
 void set_nonblocking(int fd) {
   int flags = fcntl(fd,F_GETFL, 0);
@@ -50,7 +50,6 @@ int create_server_socket() {
   return server_fd;
 }
 
-// Drain all pending connections. In non-blocking mode, multiple clients
 // may connect between epoll_wait() cals.
 void handle_accept(int server_fd, int epoll_fd) {
 

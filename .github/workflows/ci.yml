@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build redis-lite
+        run: docker compose -f docker/docker-compose.yml build
+
+      - name: Run unit tests
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm redis-lite \
+            ctest --test-dir build --output-on-failure
+
+      - name: Run integration tests
+        run: |
+          docker compose -f docker/docker-compose.yml up -d
+          sleep 2 # Wait for server to start
+          pip install -r tests/requirements.txt
+          pytest tests/integration/ -v
+          docker compose -f docker/docker-compose.yml down
+      

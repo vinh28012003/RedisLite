@@ -1,17 +1,13 @@
 """
 Shared fixtures for integration tests.
-Starts/stops the redis-lite server process for each test session.
+Verifies redis-lite is running before tests execute.
 """
-import subprocess
 import socket
 import time
 import pytest
-import os
 
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 6379
-# Resolve binary relative to this file's location
-SERVER_BIN = os.path.join(os.path.dirname(__file__), "..", "..", "build", "redis-lite")
 
 
 def wait_for_port(host, port, timeout=5.0):
@@ -26,13 +22,12 @@ def wait_for_port(host, port, timeout=5.0):
     raise TimeoutError(f"Server not ready on {host}:{port} after {timeout}s")
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="session", autouse=True)
 def redis_server():
-    """Start redis-lite before tests, kill it after."""
-    proc = subprocess.Popen([SERVER_BIN], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    """Verify redis-lite is running. Start the container first:
+        docker compose -f docker/docker-compose.yml up -d
+    """
     try:
         wait_for_port(SERVER_HOST, SERVER_PORT)
-        yield proc
-    finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+    except TimeoutError:
+        pytest.exit("redis-lite not running. Start it with: docker compose -f docker/docker-compose.yml up -d")
