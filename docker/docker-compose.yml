@@ -1,0 +1,11 @@
+services:
+  redis-lite:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "6379:6379"
+    volumes:
+      - ../src:/app/src     # Live code changes
+      - ../tests:/app/tests  # Live test changes
+    
