@@ -32,15 +32,29 @@ std::string execute(const std::vector<std::string>& args, Store &store) {
         // Parse optional arguments: PX millis, EX seconds
         for (size_t i = 3; i + 1 < args.size(); i++) {
             std::string opt = to_upper(args[i]);
+            
             if (opt == "PX") {
+                try {
+                    px_millis = std::stoll(args[i + 1]);
+                } catch (const std::invalid_argument&) {
+                    return "-ERR value is not an integer or out of range\r\n";
+                } catch (const std::out_of_range&) {
+                    return "-ERR value is not an integer or out of range\r\n";
+                }
                 px_millis = std::stoll(args[i + 1]);
                 i++;    // skip the value
             } else if (opt == "EX") {
-                px_millis = std::stoll(args[i + 1]) * 1000; // seconds -> millis
+                try{
+                    px_millis = std::stoll(args[i + 1]) * 1000; // seconds -> millis
+                } catch (const std::invalid_argument&) {
+                    return "-ERR value is not an integer or out of range\r\n";
+                } catch (const std::out_of_range&) {
+                    return "-ERR value is not an integer or out of range\r\n";
+                }
                 i++;
             }
         }
-        
+
         store.set(args[1], args[2], px_millis);
         return "+OK\r\n";
     }

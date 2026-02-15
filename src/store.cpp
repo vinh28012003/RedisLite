@@ -38,3 +38,5 @@ void Store::evict_expired() {
         checked++;
     }
 }
+
+size_t Store::size() const { return data_.size(); }

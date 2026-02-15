@@ -21,6 +21,7 @@ public:
     void set(const std::string &key, const std::string &value, std::optional<int64_t> px_millis = std::nullopt);
     std::optional<std::string> get(const std::string &key);
     void evict_expired();
+    size_t size() const;
 };
 
 
