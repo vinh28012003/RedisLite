@@ -4,6 +4,7 @@ find_package(GTest CONFIG REQUIRED)
 set(LIB_SOURCES
     ${CMAKE_SOURCE_DIR}/src/resp_parser.cpp
     ${CMAKE_SOURCE_DIR}/src/command.cpp
+    ${CMAKE_SOURCE_DIR}/src/store.cpp
 )
 
 # Unit tests

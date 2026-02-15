@@ -13,4 +13,8 @@ namespace resp {
     // e.g. "hey" -> "$3\r\nhey\r\n"
     std::string encode_bulk_string(const std::string& str);
 
+    // Encode a null bulk string for missing keys.
+    // returns "$-1\r\n"
+    std::string encode_null_bulk_string();
+
 }

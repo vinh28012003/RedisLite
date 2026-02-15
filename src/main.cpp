@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include "resp_parser.hpp"
 #include "command.hpp"
+#include "store.hpp"
 
 constexpr int PORT = 6379;
 constexpr int MAX_EVENTS = 64;
@@ -76,7 +77,7 @@ void handle_accept(int server_fd, int epoll_fd) {
 
 }
 
-void handle_client(int client_fd, int epoll_fd) {
+void handle_client(int client_fd, int epoll_fd, Store &store) {
   char buffer[BUFFER_SIZE];
 
 
@@ -85,7 +86,7 @@ void handle_client(int client_fd, int epoll_fd) {
   if (bytes_read > 0) {
     
     auto args = resp::parse(buffer, bytes_read);
-    auto response = command::execute(args);
+    auto response = command::execute(args, store);
     send(client_fd, response.c_str(), response.size(), 0);
 
   } else if (bytes_read == 0) {
@@ -128,6 +129,7 @@ int main(int argc, char **argv) {
 
   std::cout << "RedisLite listening on port " << PORT << "\n";
 
+  Store store;
   // === THE EVENT LOOP ===
   epoll_event events[MAX_EVENTS];
   while (true) {
@@ -138,7 +140,7 @@ int main(int argc, char **argv) {
       if (events[i].data.fd == server_fd) {
         handle_accept(server_fd, epoll_fd);
       } else {
-        handle_client(events[i].data.fd, epoll_fd);
+        handle_client(events[i].data.fd, epoll_fd, store);
       }
     }
   }

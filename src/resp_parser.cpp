@@ -39,4 +39,5 @@ std::string encode_bulk_string(const std::string& str) {
     return "$" + std::to_string(str.size()) + "\r\n" + str + "\r\n";
 }
 
+std::string encode_null_bulk_string() { return "$-1\r\n"; }
 }
