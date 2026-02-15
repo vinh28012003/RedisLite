@@ -5,11 +5,12 @@
 #include <sys/epoll.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include "resp_parser.hpp"
+#include "command.hpp"
 
 constexpr int PORT = 6379;
 constexpr int MAX_EVENTS = 64;
 constexpr int BUFFER_SIZE = 1024;
-constexpr const char* PONG_RESPONSE = "+PONG\r\n"; 
 
 // Non-blocking is required for epoll level-triggered mode.
 // If we block on read(), the entire event loop stalls.
@@ -67,7 +68,7 @@ void handle_accept(int server_fd, int epoll_fd) {
 
   // Register client with epoll - wake us when it sends data
   epoll_event ev{};
-  ev.events = EPOLLIN; // Edge-triggered
+  ev.events = EPOLLIN; // Level trigger
   ev.data.fd = client_fd;
   epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &ev);
 
@@ -82,8 +83,11 @@ void handle_client(int client_fd, int epoll_fd) {
   ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer), 0);
 
   if (bytes_read > 0) {
-    // Respond PING regardless of what client
-    send(client_fd, PONG_RESPONSE, strlen(PONG_RESPONSE), 0);
+    
+    auto args = resp::parse(buffer, bytes_read);
+    auto response = command::execute(args);
+    send(client_fd, response.c_str(), response.size(), 0);
+
   } else if (bytes_read == 0) {
     // CLient disconnected gracefully
     std::cout << "Client disconnected (fd=" << client_fd << ")\n";
