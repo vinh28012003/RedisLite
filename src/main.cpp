@@ -134,7 +134,7 @@ int main(int argc, char **argv) {
   epoll_event events[MAX_EVENTS];
   while (true) {
     // Block untill at least one fd is ready
-    int num_events = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
+    int num_events = epoll_wait(epoll_fd, events, MAX_EVENTS, 100);
 
     for (int i = 0; i < num_events; i++) {
       if (events[i].data.fd == server_fd) {
@@ -143,6 +143,8 @@ int main(int argc, char **argv) {
         handle_client(events[i].data.fd, epoll_fd, store);
       }
     }
+    
+    store.evict_expired(); // Active cleanup every ~100ms
   }
 
   close(server_fd);

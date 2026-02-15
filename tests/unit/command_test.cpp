@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include "command.hpp"
+#include <thread>
+#include <chrono>
 
 TEST(Command, PingReturnPong) {
     Store store;
@@ -62,4 +64,32 @@ TEST(Command, SetOverwritesExistingKey) {
     command::execute({"SET", "key", "new"}, store);
     auto response = command::execute({"GET", "key"}, store);
     EXPECT_EQ(response, "$3\r\nnew\r\n");
+}
+
+TEST(Command, SetWithPxExpires) {
+    Store store;
+    command::execute({"SET", "foo", "bar", "PX", "50"}, store);
+    EXPECT_EQ(command::execute({"GET", "foo"}, store), "$3\r\nbar\r\n");
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_EQ(command::execute({"GET", "foo"}, store), "$-1\r\n");
+}
+
+TEST(Command, SetWithExExpires) {
+    Store store;
+    command::execute({"SET", "foo", "bar", "EX", "1"}, store);
+    EXPECT_EQ(command::execute({"GET", "foo"}, store), "$3\r\nbar\r\n");
+}
+
+TEST(Command, SetClearsPreviousTtl) {
+    Store store;
+    command::execute({"SET", "foo", "bar", "PX", "50"}, store);
+    command::execute({"SET", "foo", "bar"}, store); //no PX - clears TTL
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_EQ(command::execute({"GET", "foo"}, store), "$3\r\nbar\r\n"); //still alive
+}
+
+TEST(Command, SetPxCaseInsensitive) {
+    Store store;
+    command::execute({"SET", "foo", "bar", "px", "50"}, store);
+    EXPECT_EQ(command::execute({"GET", "foo"}, store), "$3\r\nbar\r\n");
 }
