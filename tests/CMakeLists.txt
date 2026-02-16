@@ -5,6 +5,7 @@ set(LIB_SOURCES
     ${CMAKE_SOURCE_DIR}/src/resp_parser.cpp
     ${CMAKE_SOURCE_DIR}/src/command.cpp
     ${CMAKE_SOURCE_DIR}/src/store.cpp
+    ${CMAKE_SOURCE_DIR}/src/server.cpp
 )
 
 # Unit tests
