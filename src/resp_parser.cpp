@@ -2,36 +2,41 @@
 #include <stdexcept>
 
 namespace resp {
-std::vector<std::string> parse(const char* buffer, size_t length) {
-    std::vector<std::string> result;
+    
+ParseResult parse(const char* buffer, size_t length) {
+    ParseResult result;
     size_t pos = 0;
 
-    // Expect '*' - RESP array
     if (pos >= length || buffer[pos] != '*') return result;
-    pos++; // skip '*'
+    pos++;
 
-    // Read element count (e.g. "2\r\n")
     size_t count_start = pos;
     while (pos < length && buffer[pos] != '\r') pos++;
+    if (pos + 1 >= length) return result;
     int count = std::stoi(std::string(buffer + count_start, pos - count_start));
-    pos += 2; // skip "\r\n"
+    pos += 2;
 
-    // Read each bulk string element
-    for (int i = 0; i < count && pos < length; i++)  {
-        //Expect '$' - bulk string
-        if (buffer[pos] != '$') break;
-        pos++; // skip '$'
+    std::vector<std::string> args;  // local — not in result yet
 
-        // Read string length (e.g. "4\r\n")
+    for (int i = 0; i < count; i++) {
+        if (pos >= length || buffer[pos] != '$') return result;
+        pos++;
+
         size_t len_start = pos;
         while (pos < length && buffer[pos] != '\r') pos++;
+        if (pos + 1 >= length) return result;
         int str_len = std::stoi(std::string(buffer + len_start, pos - len_start));
-        pos += 2; // skip "\r\n"
+        pos += 2;
 
-        // Read exactly str_len bytes
-        result.emplace_back(buffer + pos, str_len);
-        pos += str_len + 2; // skip data + "\r\n"
+        if (pos + str_len + 2 > length) return result;
+
+        args.emplace_back(buffer + pos, str_len);
+        pos += str_len + 2;
     }
+
+    // Only assigned on complete parse
+    result.args = std::move(args);
+    result.bytes_consumed = pos;
     return result;
 }
 

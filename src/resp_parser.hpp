@@ -3,11 +3,16 @@
 #include <string>
 #include <vector>
 
+struct ParseResult {                                                                                    
+    std::vector<std::string> args;                                                                      
+    size_t bytes_consumed = 0;                                                                          
+}; 
+
 namespace resp {
 
-    // Parse raw RESP bytes into a vector of string.
-    // e.g. "*2\r\n$4\r\nECHO\r\n$3\r\nhey\r\n" -> {"ECHO", "hey"}
-    std::vector<std::string> parse(const char* buffer, size_t length);
+    // Parse one RESP command from buffer.
+    // Returns args + bytes consumed. bytes_consumed=0 means incomplete.
+    ParseResult parse(const char* buffer, size_t length);
 
     // Encode a string as a RESP bulk string.
     // e.g. "hey" -> "$3\r\nhey\r\n"
