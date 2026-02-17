@@ -24,3 +24,39 @@ TEST(Config, MissingPortValue) {
     char* argv[] = {(char*)"redis-lite", (char*)"--port"};
     EXPECT_THROW(parse_port(2, argv), std::runtime_error);
 }
+
+TEST(Config, NonNumericPort) {
+    // --port abc → throws runtime_error (stoi fails)
+    char* argv[] = {(char*)"redis-lite", (char*)"--port", (char*)"abc"};
+    EXPECT_THROW(parse_port(3, argv), std::runtime_error);
+}
+
+TEST(Config, NegativePort) {
+    // --port -1 → throws runtime_error (out of range)
+    char* argv[] = {(char*)"redis-lite", (char*)"--port", (char*)"-1"};
+    EXPECT_THROW(parse_port(3, argv), std::runtime_error);
+}
+
+TEST(Config, ZeroPort) {
+    // --port 0 → throws runtime_error (out of range)
+    char* argv[] = {(char*)"redis-lite", (char*)"--port", (char*)"0"};
+    EXPECT_THROW(parse_port(3, argv), std::runtime_error);
+}
+
+TEST(Config, PortTooHigh) {
+    // --port 99999 → throws runtime_error (out of range)
+    char* argv[] = {(char*)"redis-lite", (char*)"--port", (char*)"99999"};
+    EXPECT_THROW(parse_port(3, argv), std::runtime_error);
+}
+
+TEST(Config, UnknownFlag) {
+    // --foo → throws runtime_error
+    char* argv[] = {(char*)"redis-lite", (char*)"--foo"};
+    EXPECT_THROW(parse_port(2, argv), std::runtime_error);
+}
+
+TEST(Config, UnknownFlagWithValue) {
+    // --foo bar → throws runtime_error
+    char* argv[] = {(char*)"redis-lite", (char*)"--foo", (char*)"bar"};
+    EXPECT_THROW(parse_port(3, argv), std::runtime_error);
+}
