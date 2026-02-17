@@ -1,0 +1,26 @@
+#include <gtest/gtest.h>
+#include "config.hpp"
+
+TEST(Config, DefaultPort) {
+    // No --port flag → 6379
+    char* argv[] = {(char*)"redis-lite"};
+    EXPECT_EQ(parse_port(1, argv), 6379);
+}
+
+TEST(Config, CustomPort) {
+    // --port 6380 → 6380
+    char* argv[] = {(char*)"redis-lite", (char*)"--port", (char*)"6380"};
+    EXPECT_EQ(parse_port(3, argv), 6380);
+}
+
+TEST(Config, RandomPort) {
+    // --port 9999 → 9999
+    char* argv[] = {(char*)"redis-lite", (char*)"--port", (char*)"9999"};
+    EXPECT_EQ(parse_port(3, argv), 9999);
+}
+
+TEST(Config, MissingPortValue) {
+    // --port with no value → throws runtime_error
+    char* argv[] = {(char*)"redis-lite", (char*)"--port"};
+    EXPECT_THROW(parse_port(2, argv), std::runtime_error);
+}
