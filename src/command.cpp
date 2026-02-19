@@ -10,7 +10,7 @@ static std::string to_upper(std::string s) {
     return s;
 }
 
-std::string execute(const std::vector<std::string>& args, Store &store) {
+std::string execute(const std::vector<std::string>& args, Store &store, const ReplicationInfo &repl_info) {
     if (args.empty()) return "-ERR no command\r\n";
 
     std::string cmd = to_upper(args[0]);
@@ -22,6 +22,18 @@ std::string execute(const std::vector<std::string>& args, Store &store) {
     if (cmd == "ECHO") {
         if (args.size() < 2) return "-ERR wrong number of arguments for 'echo' command\r\n";
         return resp::encode_bulk_string(args[1]);
+    }
+
+    if (cmd == "INFO") {
+        // If section sepcified, upper case it for case-insensitive match
+        std::string section = (args.size() >= 2) ? to_upper(args[1]) : "";
+
+        if (section.empty() || section == "REPLICATION") {
+            return resp::encode_bulk_string("role:" + repl_info.role);
+        }
+
+        return resp::encode_bulk_string("");
+
     }
 
     if (cmd == "SET") {

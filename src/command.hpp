@@ -3,13 +3,11 @@
 #include <string>
 #include <vector>
 #include "store.hpp"
+#include "replication_info.hpp"
 
 namespace command {
 
-// Dispatch a parsed command and return the RESP-encoded response.
-std::string execute(const std::vector<std::string> &args, Store &store);
-
-// Distpatch a parsed command and return the RESP-encode response.
-std::string execute(const std::vector<std::string>& args);
+// Main dispatch — now takes replication metadata for INFO command
+std::string execute(const std::vector<std::string> &args, Store &store, const ReplicationInfo &repl_info);
 
 }
