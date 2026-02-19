@@ -60,3 +60,4 @@ TEST(Config, UnknownFlagWithValue) {
     char* argv[] = {(char*)"redis-lite", (char*)"--foo", (char*)"bar"};
     EXPECT_THROW(parse_port(3, argv), std::runtime_error);
 }
+

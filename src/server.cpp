@@ -31,7 +31,7 @@ void Server::remove_client(Client* client) {
     delete client;
 }
 
-Server::Server(int port) {
+Server::Server(int port) : repl_info_{"master"} {
     // --- Create socket ---
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
@@ -120,7 +120,7 @@ void Server::handle_read(Client* client) {
                                     client->read_buf.size());
             if (result.bytes_consumed == 0) break;  // incomplete, wait
 
-            auto response = command::execute(result.args, store_);
+            auto response = command::execute(result.args, store_, repl_info_);
             client->write_buf += response;
 
             client->read_buf.erase(0, result.bytes_consumed);

@@ -3,13 +3,15 @@
                                                                                                         
 #include <string>
 #include "store.hpp"                                                                                    
-              
+#include "replication_info.hpp"
+
 struct Client;
 
 class Server {
     Client* listener_; // server socket wrapped as Client
     int epoll_fd_;
     Store store_;
+    ReplicationInfo repl_info_;
 
     static constexpr int MAX_EVENTS = 64;
 
