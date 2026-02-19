@@ -9,12 +9,13 @@ int main(int argc, char* argv[]) {
   std::cerr << std::unitbuf;
 
   try {
-    int port = parse_port(argc, argv);
-    Server server(port);
+    Config cfg = parse_config(argc, argv);
+    ReplicationInfo repl_info{cfg.replicaof ? "worker" : "master"};
+    Server server(cfg.port, repl_info);
     server.run();
   } catch (const std::runtime_error& e) {
-      std::cerr << e.what() << "\n";
-      return 1;
+    std::cerr << e.what() << "\n";
+    return 1;
   }
 
   return 0;

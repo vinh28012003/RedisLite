@@ -36,3 +36,10 @@ def test_info_unknown_section_returns_empty_bulk(redis_server):
         # Empty bulk string: $0\r\n\r\n
         assert response == b"$0\r\n\r\n"
         
+def test_info_replication_returns_role_worker(replica_server):
+    """INFO replication on replica instance returns role:worker."""
+    with socket.create_connection(("127.0.0.1", 6380), timeout=2) as s:
+        send_command(s, "INFO", "replication")
+        response = recv_response(s)
+        assert b"role:worker" in response
+        

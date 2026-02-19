@@ -31,7 +31,7 @@ void Server::remove_client(Client* client) {
     delete client;
 }
 
-Server::Server(int port) : repl_info_{"master"} {
+Server::Server(int port, const ReplicationInfo& repl_info) : repl_info_{repl_info}  {
     // --- Create socket ---
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {

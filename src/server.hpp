@@ -24,7 +24,7 @@ class Server {
     void modify_epoll(Client* client, uint32_t events);
 
 public:
-    explicit Server(int port);
+    explicit Server(int port, const ReplicationInfo& repl_info);
     ~Server();
     void run();
 };

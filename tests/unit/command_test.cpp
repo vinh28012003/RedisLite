@@ -182,9 +182,9 @@ TEST(Command, InfoUnknownSectionReturnsEmptyBulk) {
 
 TEST(Command, InfoReplicationReturnsReplicaRole) {
     Store store;
-    ReplicationInfo replica_info{"slave"};
+    ReplicationInfo replica_info{"worker"};
     auto response = command::execute({"INFO", "replication"}, store, replica_info);
-    EXPECT_NE(response.find("role:slave"), std::string::npos);
+    EXPECT_NE(response.find("role:worker"), std::string::npos);
 }
 
 TEST(Command, InfoReplicationReturnsBulkStringFormat) {

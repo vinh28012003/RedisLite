@@ -7,5 +7,5 @@ struct ReplicationInfo {
     // Future stages will add:
     // std::string master_replid;
     // int64_t master_repl_offset;
-    // int connected_slaves;
+    // int connected_workers;
 };
