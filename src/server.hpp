@@ -26,10 +26,15 @@ class Server {
     void try_send(Client* client);
     void remove_client(Client*client);
     void modify_epoll(Client* client, uint32_t events);
-    void connect_to_master();
 
 public:
     explicit Server(int port, const ReplicationInfo& repl_info, std::optional<std::pair<std::string, int>> replicaof = std::nullopt);
     ~Server();
     void run();
+
+private:
+    void send_and_expect(int fd, const std::string& message, const std::string& expected);
+    void connect_to_master(int listen_port);
 };
+
+

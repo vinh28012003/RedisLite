@@ -2,7 +2,7 @@
 #include <stdexcept>
 
 namespace resp {
-    
+
 ParseResult parse(const char* buffer, size_t length) {
     ParseResult result;
     size_t pos = 0;
@@ -45,4 +45,16 @@ std::string encode_bulk_string(const std::string& str) {
 }
 
 std::string encode_null_bulk_string() { return "$-1\r\n"; }
+
+std::string encode_array(const std::vector<std::string>& args) {
+    std::string result = "*" + std::to_string(args.size()) + "\r\n";
+    for (const auto& arg : args) {
+        result += encode_bulk_string(arg);
+    }
+    return result;
 }
+
+}
+
+
+

@@ -22,4 +22,10 @@ namespace resp {
     // returns "$-1\r\n"
     std::string encode_null_bulk_string();
 
+                                                                                                            
+    // Encode args as RESP array: *N\r\n$len\r\narg\r\n...                                                  
+    // e.g. {"PING"} -> "*1\r\n$4\r\nPING\r\n"                                                            
+    std::string encode_array(const std::vector<std::string>& args);
+
+
 }

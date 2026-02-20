@@ -79,6 +79,10 @@ std::string execute(const std::vector<std::string>& args, Store &store, const Re
         return resp::encode_bulk_string(*value);
     }
 
+    if (cmd == "REPLCONF") {
+        return "+OK\r\n";
+    }
+
     return "-ERR unknown command '" + args[0] + "'\r\n";
 }
 

@@ -215,3 +215,18 @@ TEST(Command, InfoContainsReplOffset) {
     auto response = command::execute({"INFO", "replication"}, store, DEFAULT_REPL);
     EXPECT_NE(response.find("master_repl_offset:0"), std::string::npos);
 }
+
+// -- Test Handshake
+TEST(Command, ReplconfReturnsOk) {
+    Store store;
+    ReplicationInfo repl{"master", "abc", 0};
+    auto result = command::execute({"REPLCONF", "listening-port", "6380"}, store, repl);
+    EXPECT_EQ(result, "+OK\r\n");
+}
+
+TEST(Command, ReplconfCapaReturnsOk) {
+    Store store;
+    ReplicationInfo repl{"master", "abc", 0};
+    auto result = command::execute({"REPLCONF", "capa", "psync2"}, store, repl);
+    EXPECT_EQ(result, "+OK\r\n");
+}

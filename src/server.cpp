@@ -78,7 +78,7 @@ Server::Server(int port, const ReplicationInfo& repl_info, std::optional<std::pa
 
     // -- Handshake with master (if replica) --
     if (replicaof_) {
-        connect_to_master();
+        connect_to_master(port);
     }
 }
 
@@ -172,7 +172,7 @@ void Server::try_send(Client* client) {
     }
 }
 
-void Server::connect_to_master() {
+void Server::connect_to_master(int listen_port) {
     auto& [host, port] = *replicaof_;
 
     // 1. Create socket
@@ -202,23 +202,31 @@ void Server::connect_to_master() {
         throw std::runtime_error("Failed to connect to master " + host + ":" + std::to_string(port));
     }
     freeaddrinfo(result);
-    // 4. Send PING as RESP array
-    std::string ping = "*1\r\n$4\r\nPING\r\n";
-    if (send(fd, ping.data(), ping.size(), 0) < 0) {
-        close(fd);
-        throw std::runtime_error("Failed to send PING to master");
-    }
-
-    // 5. Receive PONG
-    char buf[256];
-    ssize_t n = recv(fd, buf, sizeof(buf), 0);
-    if (n <= 0 || std::string(buf, n).find("+PONG") == std::string::npos) {
-        close(fd);
-        throw std::runtime_error("Master did not respond with PONG");
-    }
+    // 3. Handshake step 1 PING and recv
+    send_and_expect(fd, resp::encode_array({"PING"}), "+PONG");
+    
+    // 4. Handshale step 2 REPLCONF listening-port
+    send_and_expect(fd, resp::encode_array({"REPLCONF", "listening-port", std::to_string(listen_port)}), "+OK");
+    
+    // 5. Handshake step 3: REPLCONF capa psync2
+    send_and_expect(fd, resp::encode_array({"REPLCONF", "capa", "psync2"}), "+OK"); 
 
     master_fd_ = fd;
     std::cout << "Connected to master " << host << ":" << port << "\n";
+}
+
+void Server::send_and_expect(int fd, const std::string& message, const std::string& expected) {
+    if (send(fd, message.data(), message.size(), 0) < 0) {
+        close(fd);
+        throw std::runtime_error("Failed to send to master");
+    }
+
+    char buf[256];
+    ssize_t n = recv(fd, buf, sizeof(buf), 0);
+    if (n <= 0 || std::string(buf, n).find(expected) == std::string::npos) {
+        close(fd);
+        throw std::runtime_error("Expected '" + expected + "' from master");
+    }
 }
 
 void Server::run() {
@@ -243,3 +251,4 @@ void Server::run() {
         store_.evict_expired();
     }
 }
+
