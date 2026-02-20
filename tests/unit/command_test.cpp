@@ -3,8 +3,9 @@
 #include <thread>                                                                                       
 #include <chrono>                                                                                       
 #include "replication_info.hpp"
+#include "resp_parser.hpp"
 
-static const ReplicationInfo DEFAULT_REPL{"master"};
+static const ReplicationInfo DEFAULT_REPL{"master", "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb", 0};
 
 // --- Dispatch: empty/unknown ---                                                                      
                                                                                                         
@@ -182,15 +183,18 @@ TEST(Command, InfoUnknownSectionReturnsEmptyBulk) {
 
 TEST(Command, InfoReplicationReturnsReplicaRole) {
     Store store;
-    ReplicationInfo replica_info{"slave"};
+    ReplicationInfo replica_info{"worker", "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb", 0};
     auto response = command::execute({"INFO", "replication"}, store, replica_info);
-    EXPECT_NE(response.find("role:slave"), std::string::npos);
+    EXPECT_NE(response.find("role:worker"), std::string::npos);
 }
 
 TEST(Command, InfoReplicationReturnsBulkStringFormat) {
     Store store;
     auto response = command::execute({"INFO", "replication"}, store, DEFAULT_REPL);
-    EXPECT_EQ(response, "$11\r\nrole:master\r\n");
+    std::string expected = "role:master\r\n"
+                           "master_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\r\n"
+                           "master_repl_offset:0";
+    EXPECT_EQ(response, resp::encode_bulk_string(expected));
 }
 
 TEST(Command, InfoIgnoresExtraArguments) {
@@ -199,3 +203,15 @@ TEST(Command, InfoIgnoresExtraArguments) {
     EXPECT_NE(response.find("role:master"), std::string::npos);
 }
 
+TEST(Command, InfoContainsReplid) {
+    Store store;
+    auto response = command::execute({"INFO", "replication"}, store, DEFAULT_REPL);
+    EXPECT_NE(response.find("master_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"),
+std::string::npos);
+}
+
+TEST(Command, InfoContainsReplOffset) {
+    Store store;
+    auto response = command::execute({"INFO", "replication"}, store, DEFAULT_REPL);
+    EXPECT_NE(response.find("master_repl_offset:0"), std::string::npos);
+}

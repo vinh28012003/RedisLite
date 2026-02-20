@@ -29,7 +29,8 @@ std::string execute(const std::vector<std::string>& args, Store &store, const Re
         std::string section = (args.size() >= 2) ? to_upper(args[1]) : "";
 
         if (section.empty() || section == "REPLICATION") {
-            return resp::encode_bulk_string("role:" + repl_info.role);
+            std::string body = "role:" + repl_info.role + "\r\n" + "master_replid:" + repl_info.master_replid + "\r\n" + "master_repl_offset:" + std::to_string(repl_info.master_repl_offset);
+            return resp::encode_bulk_string(body);
         }
 
         return resp::encode_bulk_string("");

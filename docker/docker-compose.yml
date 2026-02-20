@@ -5,7 +5,8 @@ services:
       dockerfile: docker/Dockerfile
     ports:
       - "6379:6379"
-    volumes:
+      - "6380:6380"
+    volumes:  
       - ../src:/app/src     # Live code changes
       - ../tests:/app/tests  # Live test changes
     

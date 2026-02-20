@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <netinet/tcp.h>
 #include <stdexcept>
+#include <netdb.h>
 
 void Server::set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -31,7 +32,7 @@ void Server::remove_client(Client* client) {
     delete client;
 }
 
-Server::Server(int port) : repl_info_{"master"} {
+Server::Server(int port, const ReplicationInfo& repl_info, std::optional<std::pair<std::string, int>> replicaof) : repl_info_{repl_info}, replicaof_{std::move(replicaof)}  {
     // --- Create socket ---
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
@@ -74,6 +75,11 @@ Server::Server(int port) : repl_info_{"master"} {
     epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, server_fd, &ev);
 
     std::cout << "RedisLite listening on port " << port << "\n";
+
+    // -- Handshake with master (if replica) --
+    if (replicaof_) {
+        connect_to_master();
+    }
 }
 
 Server::~Server() {
@@ -164,6 +170,55 @@ void Server::try_send(Client* client) {
     } else {
         modify_epoll(client, EPOLLIN | EPOLLOUT); // more to send
     }
+}
+
+void Server::connect_to_master() {
+    auto& [host, port] = *replicaof_;
+
+    // 1. Create socket
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        throw std::runtime_error("Failed to create master socket");
+    }
+
+    // 2. Resolve address + connect
+    addrinfo hints{};
+    hints.ai_family = AF_INET;          //IPv4
+    hints.ai_socktype = SOCK_STREAM;    // TCP
+    
+    addrinfo* result = nullptr;
+    std::string port_str = std::to_string(port);
+    int status = getaddrinfo(host.c_str(), port_str.c_str(), &hints, &result);
+    if (status != 0 || !result) {
+        close(fd);
+        freeaddrinfo(result);
+        throw std::runtime_error("Failed to resolve master address: " + host);
+    }
+
+    // 3. Connect using first resolved address
+    if (connect(fd, result->ai_addr, result->ai_addrlen) < 0) {
+        close(fd);
+        freeaddrinfo(result);
+        throw std::runtime_error("Failed to connect to master " + host + ":" + std::to_string(port));
+    }
+    freeaddrinfo(result);
+    // 4. Send PING as RESP array
+    std::string ping = "*1\r\n$4\r\nPING\r\n";
+    if (send(fd, ping.data(), ping.size(), 0) < 0) {
+        close(fd);
+        throw std::runtime_error("Failed to send PING to master");
+    }
+
+    // 5. Receive PONG
+    char buf[256];
+    ssize_t n = recv(fd, buf, sizeof(buf), 0);
+    if (n <= 0 || std::string(buf, n).find("+PONG") == std::string::npos) {
+        close(fd);
+        throw std::runtime_error("Master did not respond with PONG");
+    }
+
+    master_fd_ = fd;
+    std::cout << "Connected to master " << host << ":" << port << "\n";
 }
 
 void Server::run() {
