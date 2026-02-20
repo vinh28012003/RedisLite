@@ -45,7 +45,7 @@ def replica_server():
         ["docker", "compose", "-f", "docker/docker-compose.yml",
         "exec", "-T", "redis-lite",
         "./build/redis-lite", "--port", "6380",
-        "--replicaof", "localhost 6379"],
+        "--replicaof", "localhost", "6379"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     try:

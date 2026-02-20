@@ -29,25 +29,13 @@ Config parse_config(int argc, char* argv[]) {
             i++;  // skip port value on next iteration
 
         } else if (arg == "--replicaof") {
-            if (i + 1 >= argc) {
+            if (i + 2 >= argc) {
                 throw std::runtime_error("--replicaof requires format: \"<host> <port>\"");
             }
             
-            std::string value = argv[i + 1];
-
-            // Find the space separating host and port: "localhost 6379"
-            size_t space = value.find(' ');
-            if (space == std::string::npos || space == 0) {
-                throw std::runtime_error("--replicaof requires format: \"<host> <port>\"");
-            }
-
-            std::string host = value.substr(0, space);
-            std::string port_str = value.substr(space + 1);
-
-            // Reject extra spaces: "localhost 6379 extra"
-            if (port_str.find(' ') != std::string::npos) {
-                throw std::runtime_error("--replicaof requires format: \"<host> <port>\"");
-            }
+            std::string host = argv[i + 1];
+            std::string port_str = argv[i + 2];
+            
 
             int master_port;
             try {
@@ -61,7 +49,7 @@ Config parse_config(int argc, char* argv[]) {
             }
 
             config.replicaof = {host, master_port};
-            i++;
+            i+=2;
         
         } else if (arg.starts_with("--")) {
             // Unknown flag — reject early rather than silently ignoring

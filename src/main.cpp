@@ -15,7 +15,7 @@ int main(int argc, char* argv[]) {
       "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
       0
     };
-    Server server(cfg.port, repl_info);
+    Server server(cfg.port, repl_info, cfg.replicaof);
     server.run();
   } catch (const std::runtime_error& e) {
     std::cerr << e.what() << "\n";

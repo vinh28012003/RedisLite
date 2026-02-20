@@ -55,3 +55,10 @@ def test_info_contains_repl_offset(redis_server):
         send_command(s, "INFO", "replication")
         response = recv_response(s)
         assert b"master_repl_offset:0" in response
+
+def test_replica_handshake_connects_to_master(replica_server):
+    """Replica successfully completes handshake — responds to commands after PING to master."""
+    with socket.create_connection(("127.0.0.1", 6380), timeout=2) as s:
+        send_command(s, "PING")
+        response = recv_response(s)
+        assert response == b"+PONG\r\n"

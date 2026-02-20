@@ -2,6 +2,8 @@
 #pragma once
                                                                                                         
 #include <string>
+#include <optional>
+#include <utility>
 #include "store.hpp"                                                                                    
 #include "replication_info.hpp"
 
@@ -12,6 +14,8 @@ class Server {
     int epoll_fd_;
     Store store_;
     ReplicationInfo repl_info_;
+    std::optional<std::pair<std::string, int>> replicaof_;
+    int master_fd_ = -1;
 
     static constexpr int MAX_EVENTS = 64;
 
@@ -22,9 +26,10 @@ class Server {
     void try_send(Client* client);
     void remove_client(Client*client);
     void modify_epoll(Client* client, uint32_t events);
+    void connect_to_master();
 
 public:
-    explicit Server(int port, const ReplicationInfo& repl_info);
+    explicit Server(int port, const ReplicationInfo& repl_info, std::optional<std::pair<std::string, int>> replicaof = std::nullopt);
     ~Server();
     void run();
 };

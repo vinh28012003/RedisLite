@@ -64,8 +64,8 @@ TEST(Config, UnknownFlagWithValue) {
 // --- --replicaof ---
 
 TEST(Config, ReplicaofParsesHostAndPort) {
-    char* argv[] = {(char*)"redis-lite", (char*)"--replicaof", (char*)"localhost 6379"};
-    auto config = parse_config(3, argv);
+    char* argv[] = {(char*)"redis-lite", (char*)"--replicaof", (char*)"localhost", (char*)"6379"};
+    auto config = parse_config(4, argv);
     ASSERT_TRUE(config.replicaof.has_value());
     EXPECT_EQ(config.replicaof->first, "localhost");
     EXPECT_EQ(config.replicaof->second, 6379);
@@ -83,19 +83,20 @@ TEST(Config, ReplicaofMissingValueThrows) {
 }
 
 TEST(Config, ReplicaofMissingPortThrows) {
+    // Only host, no port arg → argc too low
     char* argv[] = {(char*)"redis-lite", (char*)"--replicaof", (char*)"localhost"};
     EXPECT_THROW(parse_config(3, argv), std::runtime_error);
 }
 
 TEST(Config, ReplicaofNonNumericPortThrows) {
-    char* argv[] = {(char*)"redis-lite", (char*)"--replicaof", (char*)"localhost abc"};
-    EXPECT_THROW(parse_config(3, argv), std::runtime_error);
+    char* argv[] = {(char*)"redis-lite", (char*)"--replicaof", (char*)"localhost", (char*)"abc"};
+    EXPECT_THROW(parse_config(4, argv), std::runtime_error);
 }
 
 TEST(Config, BothPortAndReplicaof) {
     char* argv[] = {(char*)"redis-lite", (char*)"--port", (char*)"6380",
-                    (char*)"--replicaof", (char*)"localhost 6379"};
-    auto config = parse_config(5, argv);
+                    (char*)"--replicaof", (char*)"localhost", (char*)"6379"};
+    auto config = parse_config(6, argv);
     EXPECT_EQ(config.port, 6380);
     ASSERT_TRUE(config.replicaof.has_value());
     EXPECT_EQ(config.replicaof->first, "localhost");
@@ -103,6 +104,6 @@ TEST(Config, BothPortAndReplicaof) {
 }
 
 TEST(Config, ReplicaofPortOutOfRangeThrows) {
-    char* argv[] = {(char*)"redis-lite", (char*)"--replicaof", (char*)"localhost 99999"};
-    EXPECT_THROW(parse_config(3, argv), std::runtime_error);
+    char* argv[] = {(char*)"redis-lite", (char*)"--replicaof", (char*)"localhost", (char*)"99999"};
+    EXPECT_THROW(parse_config(4, argv), std::runtime_error);
 }
