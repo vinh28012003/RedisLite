@@ -64,3 +64,21 @@ TEST(RespParser, IncompleteArrayHeader) {
     EXPECT_TRUE(result.args.empty());
     EXPECT_EQ(result.bytes_consumed, 0);
 }
+
+TEST(RespParser, EncodeArraySingleElement) {                                                            
+    // {"PING"} -> "*1\r\n$4\r\nPING\r\n"                                                               
+    auto result = resp::encode_array({"PING"});                                                       
+    EXPECT_EQ(result, "*1\r\n$4\r\nPING\r\n");                                                          
+}                                                                                                       
+
+TEST(RespParser, EncodeArrayMultipleElements) {
+    // {"REPLCONF", "listening-port", "6380"}
+    auto result = resp::encode_array({"REPLCONF", "listening-port", "6380"});
+    EXPECT_EQ(result, "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$4\r\n6380\r\n");
+}
+
+TEST(RespParser, EncodeArrayEmpty) {
+    auto result = resp::encode_array({});
+    EXPECT_EQ(result, "*0\r\n");
+}
+
