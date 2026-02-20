@@ -4,8 +4,7 @@
 // Passed to command handler so INFO can report server identity.
 struct ReplicationInfo {
     std::string role;  // "master" or "replica"
-    // Future stages will add:
-    // std::string master_replid;
-    // int64_t master_repl_offset;
+    std::string master_replid;
+    int64_t master_repl_offset = 0;
     // int connected_workers;
 };

@@ -15,11 +15,10 @@ def recv_response(sock):
 
 def test_info_replication_returns_role_master(redis_server):
     """INFO replication returns bulk string containing role:master."""
-    with socket.create_connection(("127.0.0.1", 6379), timeout = 2) as s:
+    with socket.create_connection(("127.0.0.1", 6379), timeout=2) as s:
         send_command(s, "INFO", "replication")
         response = recv_response(s)
-        # Exact bulk string : $11\r\nrole:master\r\n
-        assert response == b"$11\r\nrole:master\r\n"
+        assert b"role:master" in response
         
 def test_info_no_section_defaults_to_replication(redis_server):
     """INFO with no args still returns replication info."""
@@ -42,4 +41,17 @@ def test_info_replication_returns_role_worker(replica_server):
         send_command(s, "INFO", "replication")
         response = recv_response(s)
         assert b"role:worker" in response
-        
+
+def test_info_contains_replid(redis_server):
+    """INFO replication includes master_replid (40-char hex string)."""
+    with socket.create_connection(("127.0.0.1", 6379), timeout=2) as s:
+        send_command(s, "INFO", "replication")
+        response = recv_response(s)
+        assert b"master_replid:" in response
+
+def test_info_contains_repl_offset(redis_server):
+    """INFO replication includes master_repl_offset:0."""
+    with socket.create_connection(("127.0.0.1", 6379), timeout=2) as s:
+        send_command(s, "INFO", "replication")
+        response = recv_response(s)
+        assert b"master_repl_offset:0" in response

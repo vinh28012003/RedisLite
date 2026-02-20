@@ -10,7 +10,11 @@ int main(int argc, char* argv[]) {
 
   try {
     Config cfg = parse_config(argc, argv);
-    ReplicationInfo repl_info{cfg.replicaof ? "worker" : "master"};
+    ReplicationInfo repl_info{
+      cfg.replicaof ? "worker" : "master",
+      "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
+      0
+    };
     Server server(cfg.port, repl_info);
     server.run();
   } catch (const std::runtime_error& e) {
