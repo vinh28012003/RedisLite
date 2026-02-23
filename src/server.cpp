@@ -211,6 +211,9 @@ void Server::connect_to_master(int listen_port) {
     // 5. Handshake step 3: REPLCONF capa psync2
     send_and_expect(fd, resp::encode_array({"REPLCONF", "capa", "psync2"}), "+OK"); 
 
+    // 6. Hand Shake step 4: PSYNC ? - 1 (request full resync)
+    send_and_expect(fd, resp::encode_array({"PSYNC", "?", "-1"}), "+FULLRESYNC");
+
     master_fd_ = fd;
     std::cout << "Connected to master " << host << ":" << port << "\n";
 }
