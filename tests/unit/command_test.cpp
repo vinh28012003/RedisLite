@@ -230,3 +230,17 @@ TEST(Command, ReplconfCapaReturnsOk) {
     auto result = command::execute({"REPLCONF", "capa", "psync2"}, store, repl);
     EXPECT_EQ(result, "+OK\r\n");
 }
+
+TEST(Command, PsyncReturnsFulresync) {
+    Store store;
+    ReplicationInfo repl_info{"master", "8371445fff7e1767aab63d5e534e3492a8ee2ee6", 0};
+    auto result = command::execute({"PSYNC", "?", "-1"}, store, repl_info);
+    EXPECT_EQ(result, "+FULLRESYNC 8371445fff7e1767aab63d5e534e3492a8ee2ee6 0\r\n");
+}
+
+TEST(Command, PsyncIgnoresArgsForNow) {
+    Store store;
+    ReplicationInfo repl_info{"master", "8371445fff7e1767aab63d5e534e3492a8ee2ee6", 0};
+    auto result = command::execute({"PSYNC", "abc123", "100"}, store, repl_info);
+    EXPECT_EQ(result, "+FULLRESYNC 8371445fff7e1767aab63d5e534e3492a8ee2ee6 0\r\n");
+}

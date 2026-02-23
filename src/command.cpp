@@ -83,6 +83,10 @@ std::string execute(const std::vector<std::string>& args, Store &store, const Re
         return "+OK\r\n";
     }
 
+    if (cmd == "PSYNC") {
+        return "+FULLRESYNC " + repl_info.master_replid + " 0\r\n";
+    }
+
     return "-ERR unknown command '" + args[0] + "'\r\n";
 }
 

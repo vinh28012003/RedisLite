@@ -75,3 +75,21 @@ def test_replica_fails_when_master_sends_wrong_response():
         proc.wait(timeout=5)
         returncode = 1
     assert returncode != 0
+
+def test_master_handles_psync_command():
+    """Master responds to PSYNC ? -1 with +FULLRESYNC <repl_id> 0."""
+    import re
+
+    sock = socket.create_connection(("127.0.0.1", 6379), timeout=2)
+    try:
+        sock.sendall(b"*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n")
+        response = sock.recv(1024).decode()
+
+        assert response.startswith("+FULLRESYNC ")
+        assert response.endswith(" 0\r\n")
+
+        # Extract repl_id — should be 40 hex chars
+        match = re.match(r"\+FULLRESYNC ([0-9a-f]{40}) 0\r\n", response)
+        assert match is not None, f"Unexpected FULLRESYNC format: {response}"
+    finally:
+        sock.close()
