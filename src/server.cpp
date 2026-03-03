@@ -13,6 +13,7 @@
 #include <netinet/tcp.h>
 #include <stdexcept>
 #include <netdb.h>
+#include <algorithm>
 
 void Server::set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -24,12 +25,6 @@ void Server::modify_epoll(Client* client, uint32_t events) {
     ev.events = events;
     ev.data.ptr = client;
     epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, client->fd, &ev);
-}
-
-void Server::remove_client(Client* client) {
-    epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, client->fd, nullptr);
-    close(client->fd);
-    delete client;
 }
 
 Server::Server(int port, const ReplicationInfo& repl_info, std::optional<std::pair<std::string, int>> replicaof) : repl_info_{repl_info}, replicaof_{std::move(replicaof)}  {
@@ -128,6 +123,12 @@ void Server::handle_read(Client* client) {
 
             auto response = command::execute(result.args, store_, repl_info_);
             client->write_buf += response;
+
+            // Tag PSYNC sender as REPLICA and track for propagation
+            if (!result.args.empty() && command::to_upper(result.args[0]) == "PSYNC") {
+                client->type = ClientType::REPLICA;
+                replicas_.push_back(client);
+            }
 
             client->read_buf.erase(0, result.bytes_consumed);
         }
@@ -230,6 +231,14 @@ void Server::send_and_expect(int fd, const std::string& message, const std::stri
         close(fd);
         throw std::runtime_error("Expected '" + expected + "' from master");
     }
+}
+
+void Server::remove_client(Client* client) {
+    // Remove from replicas_ before close/delete to prevent dangling pointer
+    replicas_.erase(std::remove(replicas_.begin(), replicas_.end(), client), replicas_.end());
+    epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, client->fd, nullptr);
+    close(client->fd);
+    delete client;
 }
 
 void Server::run() {

@@ -21,9 +21,14 @@ static const uint8_t EMPTY_RDB[] = {
 namespace command {
 
 // Convert string to uppercase for case-insensitive matching.
-static std::string to_upper(std::string s) {
+std::string to_upper(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), ::toupper);
     return s;
+}
+
+bool is_write_command(const std::string& cmd) {
+    std::string upper = to_upper(cmd);
+    return upper == "SET" || upper == "DEL";
 }
 
 std::string execute(const std::vector<std::string>& args, Store &store, const ReplicationInfo &repl_info) {

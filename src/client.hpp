@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 
-enum class ClientType { LISTENER, REGULAR };
+enum class ClientType { LISTENER, REGULAR, REPLICA, MASTER_CONN };
 
 struct Client {
     int fd;
