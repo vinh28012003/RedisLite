@@ -101,6 +101,10 @@ std::string execute(const std::vector<std::string>& args, Store &store, const Re
     }
 
     if (cmd == "REPLCONF") {
+
+        if (args.size() >= 2 && to_upper(args[1]) == "GETACK") {
+            return resp::encode_array({"REPLCONF", "ACK", std::to_string(repl_info.master_repl_offset)});
+        }
         return "+OK\r\n";
     }
 

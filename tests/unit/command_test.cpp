@@ -280,3 +280,33 @@ TEST(Command, IsWriteCommandGetReturnsFalse) {
 TEST(Command, IsWriteCommandPingReturnsFalse) {
     EXPECT_FALSE(command::is_write_command("PING"));
 }
+
+// --- REPLCONF GETACK (stages 14-15) ---                                                           
+                  
+TEST(Command, ReplconfGetackReturnsAckWithZeroOffset) {                                             
+    Store store;                                                                                    
+    ReplicationInfo repl{"replica", "abc123", 0};
+    auto result = command::execute({"REPLCONF", "GETACK", "*"}, store, repl);
+    EXPECT_EQ(result, "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$1\r\n0\r\n");
+}
+
+TEST(Command, ReplconfGetackReturnsAckWithNonZeroOffset) {
+    Store store;
+    ReplicationInfo repl{"replica", "abc123", 154};
+    auto result = command::execute({"REPLCONF", "GETACK", "*"}, store, repl);
+    EXPECT_EQ(result, "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$3\r\n154\r\n");
+}
+
+TEST(Command, ReplconfGetackCaseInsensitive) {
+    Store store;
+    ReplicationInfo repl{"replica", "abc123", 0};
+    auto result = command::execute({"replconf", "getack", "*"}, store, repl);
+    EXPECT_EQ(result, "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$1\r\n0\r\n");
+}
+
+TEST(Command, ReplconfListeningPortStillReturnsOkAfterGetackChange) {
+    Store store;
+    ReplicationInfo repl{"master", "abc123", 0};
+    auto result = command::execute({"REPLCONF", "listening-port", "6380"}, store, repl);
+    EXPECT_EQ(result, "+OK\r\n");
+}

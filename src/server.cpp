@@ -124,7 +124,13 @@ void Server::handle_read(Client* client) {
             auto response = command::execute(result.args, store_, repl_info_);
 
             if (client->type == ClientType::MASTER_CONN) {
-                // Replica: execute silently, no response back to master 
+                
+                // Track replication stream bytes for ACK reporting.
+                repl_info_.master_repl_offset += result.bytes_consumed;
+
+                if (result.args.size() >= 2 && command::to_upper(result.args[0]) == "REPLCONF" && command::to_upper(result.args[1]) == "GETACK") {
+                    client->write_buf += response;
+                }
             } else {
                 client->write_buf += response;
 
