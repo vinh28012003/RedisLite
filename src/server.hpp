@@ -6,6 +6,7 @@
 #include <utility>
 #include "store.hpp"                                                                                    
 #include "replication_info.hpp"
+#include <vector>
 
 struct Client;
 
@@ -16,6 +17,7 @@ class Server {
     ReplicationInfo repl_info_;
     std::optional<std::pair<std::string, int>> replicaof_;
     int master_fd_ = -1;
+    std::vector<Client*> replicas_;
 
     static constexpr int MAX_EVENTS = 64;
 
@@ -24,7 +26,7 @@ class Server {
     void handle_read(Client* client);
     void handle_write(Client* client);
     void try_send(Client* client);
-    void remove_client(Client*client);
+    void remove_client(Client* client);
     void modify_epoll(Client* client, uint32_t events);
 
 public:

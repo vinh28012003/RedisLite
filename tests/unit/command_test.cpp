@@ -256,3 +256,27 @@ TEST(Command, PsyncIgnoresArgsForNow) {
     // Total: 56 (FULLRESYNC line) + 5 ($88\r\n) + 88 (binary) = 149 bytes
     EXPECT_EQ(result.size(), 149);
 }
+
+
+// --- is_write_command ---
+
+TEST(Command, IsWriteCommandSet) {
+    EXPECT_TRUE(command::is_write_command("SET"));
+}
+
+TEST(Command, IsWriteCommandDel) {
+    EXPECT_TRUE(command::is_write_command("DEL"));
+}
+
+TEST(Command, IsWriteCommandCaseInsensitive) {
+    EXPECT_TRUE(command::is_write_command("set"));
+    EXPECT_TRUE(command::is_write_command("del"));
+}
+
+TEST(Command, IsWriteCommandGetReturnsFalse) {
+    EXPECT_FALSE(command::is_write_command("GET"));
+}
+
+TEST(Command, IsWriteCommandPingReturnsFalse) {
+    EXPECT_FALSE(command::is_write_command("PING"));
+}
