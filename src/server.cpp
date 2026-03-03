@@ -122,14 +122,27 @@ void Server::handle_read(Client* client) {
             if (result.bytes_consumed == 0) break;  // incomplete, wait
 
             auto response = command::execute(result.args, store_, repl_info_);
-            client->write_buf += response;
 
-            // Tag PSYNC sender as REPLICA and track for propagation
-            if (!result.args.empty() && command::to_upper(result.args[0]) == "PSYNC") {
-                client->type = ClientType::REPLICA;
-                replicas_.push_back(client);
-            }
+            if (client->type == ClientType::MASTER_CONN) {
+                // Replica: execute silently, no response back to master 
+            } else {
+                client->write_buf += response;
 
+                // Tag PSYNC sender as REPLICA and track for propagation
+                if (!result.args.empty() && command::to_upper(result.args[0]) == "PSYNC") {
+                    client->type = ClientType::REPLICA;
+                    replicas_.push_back(client);
+                }
+                
+                // Propagate write commands to all tracked replicas
+                if (command::is_write_command(result.args[0]) && !replicas_.empty()) {
+                    std::string propagated = resp::encode_array(result.args);
+                    for (auto* replica: replicas_) {
+                        replica->write_buf += propagated;
+                        try_send(replica);
+                    }
+                } 
+            }   
             client->read_buf.erase(0, result.bytes_consumed);
         }
 
@@ -213,9 +226,47 @@ void Server::connect_to_master(int listen_port) {
     send_and_expect(fd, resp::encode_array({"REPLCONF", "capa", "psync2"}), "+OK"); 
 
     // 6. Hand Shake step 4: PSYNC ? - 1 (request full resync)
-    send_and_expect(fd, resp::encode_array({"PSYNC", "?", "-1"}), "+FULLRESYNC");
+    std::string psync_msg = resp::encode_array({"PSYNC", "?", "-1"});                                   
+    if (send(fd, psync_msg.data(), psync_msg.size(), 0) < 0) {                                          
+        close(fd);                                            
+        throw std::runtime_error("Failed to send PSYNC to master");
+    }
 
+    // 7. handles both FULLRESYNC parsing AND RDB consumption
+    char buf[4096];
+    std::string accumulated;
+    while (true) {
+        ssize_t n = recv(fd, buf, sizeof(buf), 0);
+        if (n <= 0) {
+            close(fd);
+            throw std::runtime_error("Failed to recv PSYNC response from master");
+        }
+        accumulated.append(buf, n);
+
+        if (accumulated.find("+FULLRESYNC") == std::string::npos) continue;
+
+        auto dollar = accumulated.find('$');
+        if (dollar == std::string::npos) continue;
+
+        auto rdb_header_end = accumulated.find("\r\n", dollar);
+        if (rdb_header_end == std::string::npos) continue;
+
+        int rdb_len = std::stoi(accumulated.substr(dollar + 1, rdb_header_end - dollar - 1));
+        size_t rdb_start = rdb_header_end + 2;
+
+        if (accumulated.size() >= rdb_start + rdb_len) break;
+    }
+    
     master_fd_ = fd;
+    
+    // 8. Register master_fd_ with epoll as MASTER_CONN
+    set_nonblocking(fd);
+    auto* master_client = new Client(fd, ClientType::MASTER_CONN);
+    epoll_event mev{};
+    mev.events = EPOLLIN;
+    mev.data.ptr = master_client;
+    epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &mev);
+    
     std::cout << "Connected to master " << host << ":" << port << "\n";
 }
 
