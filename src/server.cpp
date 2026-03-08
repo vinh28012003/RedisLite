@@ -124,30 +124,42 @@ void Server::handle_read(Client* client) {
             auto response = command::execute(result.args, store_, repl_info_);
 
             if (client->type == ClientType::MASTER_CONN) {
-                
-                // Track replication stream bytes for ACK reporting.
+                // Replica-side: track replication stream bytes for ACK reporting
                 repl_info_.master_repl_offset += result.bytes_consumed;
 
                 if (result.args.size() >= 2 && command::to_upper(result.args[0]) == "REPLCONF" && command::to_upper(result.args[1]) == "GETACK") {
                     client->write_buf += response;
                 }
+            } else if (client->type == ClientType::REPLICA) {
+                // Master-side: replica sent us data (REPLCONF ACK)
+                if (result.args.size() >= 3 && command::to_upper(result.args[0]) == "REPLCONF" && command::to_upper(result.args[1]) == "ACK") {
+                    client->ack_offset = client->repl_base_offset + std::stoll(result.args[2]);
+                    resolve_pending_waits();
+                }
             } else {
-                client->write_buf += response;
+                // WAIT returns empty — server handles it
+                if (!result.args.empty() && command::to_upper(result.args[0]) == "WAIT" && response.empty()) {
+                    handle_wait(client, result.args);
+                } else {
+                    client->write_buf += response;
+                }
 
                 // Tag PSYNC sender as REPLICA and track for propagation
                 if (!result.args.empty() && command::to_upper(result.args[0]) == "PSYNC") {
                     client->type = ClientType::REPLICA;
+                    client->repl_base_offset = master_repl_offset_;
                     replicas_.push_back(client);
                 }
-                
+
                 // Propagate write commands to all tracked replicas
                 if (command::is_write_command(result.args[0]) && !replicas_.empty()) {
                     std::string propagated = resp::encode_array(result.args);
+                    master_repl_offset_ += static_cast<int64_t>(propagated.size());
                     for (auto* replica: replicas_) {
                         replica->write_buf += propagated;
                         try_send(replica);
                     }
-                } 
+                }
             }   
             client->read_buf.erase(0, result.bytes_consumed);
         }
@@ -293,9 +305,95 @@ void Server::send_and_expect(int fd, const std::string& message, const std::stri
 void Server::remove_client(Client* client) {
     // Remove from replicas_ before close/delete to prevent dangling pointer
     replicas_.erase(std::remove(replicas_.begin(), replicas_.end(), client), replicas_.end());
+
+    // Remove from pending_waits_ if this client was blocked on WAIT
+    pending_waits_.erase(
+        std::remove_if(pending_waits_.begin(), pending_waits_.end(),
+            [client](const WaitState& ws) { return ws.client == client; }),
+        pending_waits_.end());
+
     epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, client->fd, nullptr);
     close(client->fd);
     delete client;
+}
+
+// Count replicas whose last ACK offset >= target
+int Server::count_caught_up_replicas(int64_t target_offset) {
+    int count = 0;
+    for (const auto* replica : replicas_) {
+        if (replica->ack_offset >= target_offset) count++;
+    }
+    return count;
+}
+
+// WAIT command handler — resolves immediately or parks the client
+void Server::handle_wait(Client* client, const std::vector<std::string>& args) {
+    int num_needed = std::stoi(args[1]);
+    long long timeout_ms = std::stoll(args[2]);
+
+    // no replicas connected → return 0
+    // no commands propagated → all replicas are "caught up"
+    if (replicas_.empty() || master_repl_offset_ == 0) {
+        int count = (master_repl_offset_ == 0)
+            ? static_cast<int>(replicas_.size())
+            : 0;
+        client->write_buf += ":" + std::to_string(count) + "\r\n";
+        try_send(client);
+        return;
+    }
+
+    // Fast path: enough replicas already ACK'd
+    int caught_up = count_caught_up_replicas(master_repl_offset_);
+    if (caught_up >= num_needed) {
+        client->write_buf += ":" + std::to_string(caught_up) + "\r\n";
+        try_send(client);
+        return;
+    }
+
+    // send REPLCONF GETACK * to all replicas, then park
+    std::string getack = resp::encode_array({"REPLCONF", "GETACK", "*"});
+    for (auto* replica : replicas_) {
+        replica->write_buf += getack;
+        try_send(replica);
+    }
+
+    // Park client — event loop will resolve when ACKs arrive or deadline expires
+    auto deadline = (timeout_ms > 0)
+        ? std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms)
+        : std::chrono::steady_clock::time_point::max();  // 0 timeout = wait forever
+
+    pending_waits_.push_back({client, num_needed, master_repl_offset_, deadline});
+}
+
+// Check if any pending WAIT can be resolved (enough ACKs received)
+void Server::resolve_pending_waits() {
+    auto it = pending_waits_.begin();
+    while (it != pending_waits_.end()) {
+        int caught_up = count_caught_up_replicas(it->target_offset);
+        if (caught_up >= it->num_needed) {
+            it->client->write_buf += ":" + std::to_string(caught_up) + "\r\n";
+            try_send(it->client);
+            it = pending_waits_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+// Expire pending WAITs that have passed their deadline
+void Server::check_wait_timeouts() {
+    auto now = std::chrono::steady_clock::now();
+    auto it = pending_waits_.begin();
+    while (it != pending_waits_.end()) {
+        if (now >= it->deadline) {
+            int caught_up = count_caught_up_replicas(it->target_offset);
+            it->client->write_buf += ":" + std::to_string(caught_up) + "\r\n";
+            try_send(it->client);
+            it = pending_waits_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 void Server::run() {
@@ -314,9 +412,9 @@ void Server::run() {
             } else if (events[i].events & EPOLLOUT) {
                 handle_write(client);
             }
-          
         }
 
+        check_wait_timeouts();  // Expire past-deadline WAITs each iteration
         store_.evict_expired();
     }
 }

@@ -310,3 +310,35 @@ TEST(Command, ReplconfListeningPortStillReturnsOkAfterGetackChange) {
     auto result = command::execute({"REPLCONF", "listening-port", "6380"}, store, repl);
     EXPECT_EQ(result, "+OK\r\n");
 }
+
+// --- WAIT (stages 16-18) ---
+
+TEST(Command, WaitReturnsEmptyForServerHandling) {
+    Store store;
+    auto result = command::execute({"WAIT", "1", "500"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "");  // Empty = server owns WAIT logic
+}
+
+TEST(Command, WaitCaseInsensitive) {
+    Store store;
+    auto result = command::execute({"wait", "0", "0"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "");
+}
+
+TEST(Command, WaitMissingArgsReturnsError) {
+    Store store;
+    auto result = command::execute({"WAIT"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "-ERR wrong number of arguments for 'wait' command\r\n");
+}
+
+TEST(Command, WaitMissingTimeoutReturnsError) {
+    Store store;
+    auto result = command::execute({"WAIT", "1"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "-ERR wrong number of arguments for 'wait' command\r\n");
+}
+
+TEST(Command, WaitNonNumericReturnsError) {
+    Store store;
+    auto result = command::execute({"WAIT", "abc", "def"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "-ERR value is not an integer or out of range\r\n");
+}
