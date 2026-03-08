@@ -115,6 +115,18 @@ std::string execute(const std::vector<std::string>& args, Store &store, const Re
         return response;
     }
 
+    // WAIT: validate args, return empty string to signal server-handled command
+    if (cmd == "WAIT") {
+        if (args.size() < 3) return "-ERR wrong number of arguments for 'wait' command\r\n";
+        try {
+            std::stoi(args[1]);  // numreplicas
+            std::stoi(args[2]);  // timeout
+        } catch (const std::exception&) {
+            return "-ERR value is not an integer or out of range\r\n";
+        }
+        return "";  // Server owns WAIT logic
+    }
+
     return "-ERR unknown command '" + args[0] + "'\r\n";
 }
 

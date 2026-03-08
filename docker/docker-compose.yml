@@ -8,6 +8,8 @@ services:
       - "6380:6380"
       - "6381:6381"
       - "6382:6382"
+      - "6383:6383"
+      - "6384:6384"
     volumes:  
       - ../src:/app/src     # Live code changes
       - ../tests:/app/tests  # Live test changes
