@@ -31,10 +31,14 @@ bool is_write_command(const std::string& cmd) {
     return upper == "SET" || upper == "DEL";
 }
 
-std::string execute(const std::vector<std::string>& args, Store &store, const ReplicationInfo &repl_info) {
+std::string execute(const std::vector<std::string>& args, Store &store, const ReplicationInfo &repl_info, bool from_master) {
     if (args.empty()) return "-ERR no command\r\n";
 
     std::string cmd = to_upper(args[0]);
+
+    // Reject write commands on replicas (but allow replication stream from master)
+    if (!from_master && repl_info.role == "worker" && is_write_command(cmd))
+        return "-READONLY You can't write against a read only replica.\r\n";
 
     if(cmd == "PING") {
         return "+PONG\r\n";
@@ -100,6 +104,25 @@ std::string execute(const std::vector<std::string>& args, Store &store, const Re
         return resp::encode_bulk_string(*value);
     }
 
+    if (cmd == "ROLE") {
+        // Wire protocol uses "master"/"slave" (not "worker") for client compatibility
+        if (repl_info.role == "master") {
+            // *3\r\n $6\r\nmaster\r\n :<offset>\r\n *0\r\n
+            return "*3\r\n"
+                   "$6\r\nmaster\r\n"
+                   ":" + std::to_string(repl_info.master_repl_offset) + "\r\n"
+                   "*0\r\n";
+        } else {
+            // *5\r\n $5\r\nslave\r\n $host\r\n :port\r\n $9\r\nconnected\r\n :offset\r\n
+            return "*5\r\n"
+                   "$5\r\nslave\r\n"
+                   + resp::encode_bulk_string(repl_info.master_host)
+                   + ":" + std::to_string(repl_info.master_port) + "\r\n"
+                   "$9\r\nconnected\r\n"
+                   ":" + std::to_string(repl_info.master_repl_offset) + "\r\n";
+        }
+    }
+
     if (cmd == "REPLCONF") {
 
         if (args.size() >= 2 && to_upper(args[1]) == "GETACK") {
@@ -113,6 +136,21 @@ std::string execute(const std::vector<std::string>& args, Store &store, const Re
         response += "$" + std::to_string(sizeof(EMPTY_RDB)) + "\r\n";
         response.append(reinterpret_cast<const char*>(EMPTY_RDB), sizeof(EMPTY_RDB));
         return response;
+    }
+
+    if (cmd == "REPLICAOF") {
+        if (args.size() != 3) return "-ERR wrong number of arguments for 'replicaof' command\r\n";
+        std::string arg1 = to_upper(args[1]);
+        std::string arg2 = to_upper(args[2]);
+        if (arg1 == "NO" && arg2 == "ONE") return "";  // server-handled
+        // Validate port
+        try {
+            int port = std::stoi(args[2]);
+            if (port < 1 || port > 65535) return "-ERR Invalid master port\r\n";
+        } catch (const std::exception&) {
+            return "-ERR Invalid master port\r\n";
+        }
+        return "";  // server-handled
     }
 
     // WAIT: validate args, return empty string to signal server-handled command
