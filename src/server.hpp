@@ -26,6 +26,7 @@ class Server {
     ReplicationInfo repl_info_;
     std::optional<std::pair<std::string, int>> replicaof_;
     int master_fd_ = -1;
+    Client* master_client_ = nullptr;  // Client wrapping master_fd_ (for cleanup)
     std::vector<Client*> replicas_;
     int64_t master_repl_offset_ = 0;       // Bytes propagated to replicas (master-side)
     std::vector<WaitState> pending_waits_;  // Clients blocked on WAIT
@@ -35,6 +36,8 @@ class Server {
     static void set_nonblocking(int fd);
     void handle_accept();
     void handle_read(Client* client);
+    void handle_master_read(Client* client, const std::vector<std::string>& args, const std::string& response, size_t bytes_consumed);
+    void handle_replica_read(Client* client, const std::vector<std::string>& args);
     void handle_write(Client* client);
     void try_send(Client* client);
     void remove_client(Client* client);
@@ -52,6 +55,10 @@ public:
 private:
     void send_and_expect(int fd, const std::string& message, const std::string& expected);
     void connect_to_master(int listen_port);
+    void handle_replicaof(Client* client, const std::vector<std::string>& args);
+    void handle_replicaof_no_one(Client* client);
+    void handle_replicaof_set_master(Client* client, const std::string& host, int port);
+    void disconnect_all_replicas();
 };
 
 

@@ -342,3 +342,129 @@ TEST(Command, WaitNonNumericReturnsError) {
     auto result = command::execute({"WAIT", "abc", "def"}, store, DEFAULT_REPL);
     EXPECT_EQ(result, "-ERR value is not an integer or out of range\r\n");
 }
+
+// --- Replica read-only ---
+
+TEST(Command, ReplicaRejectsSetWithReadonlyError) {
+    Store store;
+    ReplicationInfo repl{"worker", "abc", 0};
+    auto result = command::execute({"SET", "foo", "bar"}, store, repl);
+    EXPECT_EQ(result, "-READONLY You can't write against a read only replica.\r\n");
+}
+
+TEST(Command, ReplicaRejectsDelWithReadonlyError) {
+    Store store;
+    ReplicationInfo repl{"worker", "abc", 0};
+    auto result = command::execute({"DEL", "foo"}, store, repl);
+    EXPECT_EQ(result, "-READONLY You can't write against a read only replica.\r\n");
+}
+
+TEST(Command, ReplicaAllowsGetCommand) {
+    Store store;
+    ReplicationInfo repl{"worker", "abc", 0};
+    auto result = command::execute({"GET", "foo"}, store, repl);
+    EXPECT_EQ(result, "$-1\r\n");
+}
+
+TEST(Command, MasterAllowsSetCommand) {
+    Store store;
+    auto result = command::execute({"SET", "foo", "bar"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "+OK\r\n");
+}
+
+TEST(Command, ReplicaAllowsSetFromMaster) {
+    Store store;
+    ReplicationInfo repl{"worker", "abc", 0};
+    auto result = command::execute({"SET", "foo", "bar"}, store, repl, true);
+    EXPECT_EQ(result, "+OK\r\n");
+}
+
+TEST(Command, ReplicaRejectsSetCaseInsensitive) {
+    Store store;
+    ReplicationInfo repl{"worker", "abc", 0};
+    auto result = command::execute({"set", "foo", "bar"}, store, repl);
+    EXPECT_EQ(result, "-READONLY You can't write against a read only replica.\r\n");
+}
+
+// --- ROLE command ---
+
+TEST(Command, RoleMasterReturnsArrayWithMasterAndOffset) {
+    Store store;
+    auto result = command::execute({"ROLE"}, store, DEFAULT_REPL);
+    // *3\r\n $6\r\nmaster\r\n :0\r\n *0\r\n
+    EXPECT_EQ(result, "*3\r\n$6\r\nmaster\r\n:0\r\n*0\r\n");
+}
+
+TEST(Command, RoleMasterWithNonZeroOffset) {
+    Store store;
+    ReplicationInfo repl{"master", "abc", 154};
+    auto result = command::execute({"ROLE"}, store, repl);
+    EXPECT_NE(result.find(":154\r\n"), std::string::npos);
+}
+
+TEST(Command, RoleReplicaReturnsSlave) {
+    Store store;
+    ReplicationInfo repl{"worker", "abc", 0, "localhost", 6379};
+    auto result = command::execute({"ROLE"}, store, repl);
+    EXPECT_NE(result.find("$5\r\nslave\r\n"), std::string::npos);
+    EXPECT_NE(result.find("localhost"), std::string::npos);
+    EXPECT_NE(result.find(":6379\r\n"), std::string::npos);
+    EXPECT_NE(result.find("connected"), std::string::npos);
+}
+
+TEST(Command, RoleReplicaWithNonZeroOffset) {
+    Store store;
+    ReplicationInfo repl{"worker", "abc", 250, "master-host", 6379};
+    auto result = command::execute({"ROLE"}, store, repl);
+    EXPECT_NE(result.find(":250\r\n"), std::string::npos);
+}
+
+TEST(Command, RoleCaseInsensitive) {
+    Store store;
+    auto result = command::execute({"role"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "*3\r\n$6\r\nmaster\r\n:0\r\n*0\r\n");
+}
+
+// --- REPLICAOF command validation ---
+
+TEST(Command, ReplicaofNoOneReturnsEmpty) {
+    Store store;
+    auto result = command::execute({"REPLICAOF", "NO", "ONE"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "");
+}
+
+TEST(Command, ReplicaofHostPortReturnsEmpty) {
+    Store store;
+    auto result = command::execute({"REPLICAOF", "localhost", "6379"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "");
+}
+
+TEST(Command, ReplicaofMissingArgsReturnsError) {
+    Store store;
+    auto result = command::execute({"REPLICAOF"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "-ERR wrong number of arguments for 'replicaof' command\r\n");
+}
+
+TEST(Command, ReplicaofInvalidPortReturnsError) {
+    Store store;
+    auto result = command::execute({"REPLICAOF", "localhost", "99999"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "-ERR Invalid master port\r\n");
+}
+
+TEST(Command, ReplicaofNonNumericPortReturnsError) {
+    Store store;
+    auto result = command::execute({"REPLICAOF", "localhost", "abc"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "-ERR Invalid master port\r\n");
+}
+
+TEST(Command, ReplicaofCaseInsensitive) {
+    Store store;
+    auto result = command::execute({"replicaof", "no", "one"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "");
+}
+
+TEST(Command, ReplicaofZeroPortReturnsError) {
+    Store store;
+    auto result = command::execute({"REPLICAOF", "localhost", "0"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "-ERR Invalid master port\r\n");
+}

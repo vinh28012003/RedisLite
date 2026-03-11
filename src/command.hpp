@@ -8,7 +8,7 @@
 namespace command {
 
     // Main dispatch — now takes replication metadata for INFO command
-    std::string execute(const std::vector<std::string> &args, Store &store, const ReplicationInfo &repl_info);
+    std::string execute(const std::vector<std::string> &args, Store &store, const ReplicationInfo &repl_info, bool from_master = false);
     bool is_write_command(const std::string& cmd);
     std::string to_upper(std::string s);
 }

@@ -121,38 +121,36 @@ void Server::handle_read(Client* client) {
                                     client->read_buf.size());
             if (result.bytes_consumed == 0) break;  // incomplete, wait
 
-            auto response = command::execute(result.args, store_, repl_info_);
+            bool from_master = (client->type == ClientType::MASTER_CONN);
+            auto response = command::execute(result.args, store_, repl_info_, from_master);
 
             if (client->type == ClientType::MASTER_CONN) {
-                // Replica-side: track replication stream bytes for ACK reporting
-                repl_info_.master_repl_offset += result.bytes_consumed;
-
-                if (result.args.size() >= 2 && command::to_upper(result.args[0]) == "REPLCONF" && command::to_upper(result.args[1]) == "GETACK") {
-                    client->write_buf += response;
-                }
+                handle_master_read(client, result.args, response, result.bytes_consumed);
             } else if (client->type == ClientType::REPLICA) {
-                // Master-side: replica sent us data (REPLCONF ACK)
-                if (result.args.size() >= 3 && command::to_upper(result.args[0]) == "REPLCONF" && command::to_upper(result.args[1]) == "ACK") {
-                    client->ack_offset = client->repl_base_offset + std::stoll(result.args[2]);
-                    resolve_pending_waits();
-                }
+                handle_replica_read(client, result.args);
             } else {
+                std::string cmd_name = result.args.empty() ? "" : command::to_upper(result.args[0]);
+
                 // WAIT returns empty — server handles it
-                if (!result.args.empty() && command::to_upper(result.args[0]) == "WAIT" && response.empty()) {
+                if (cmd_name == "WAIT" && response.empty()) {
                     handle_wait(client, result.args);
+                } else if (cmd_name == "REPLICAOF" && response.empty()) {
+                    handle_replicaof(client, result.args);
+                    client->read_buf.erase(0, result.bytes_consumed);
+                    continue;  // skip propagation — REPLICAOF is not a write command
                 } else {
                     client->write_buf += response;
                 }
 
                 // Tag PSYNC sender as REPLICA and track for propagation
-                if (!result.args.empty() && command::to_upper(result.args[0]) == "PSYNC") {
+                if (cmd_name == "PSYNC") {
                     client->type = ClientType::REPLICA;
                     client->repl_base_offset = master_repl_offset_;
                     replicas_.push_back(client);
                 }
 
                 // Propagate write commands to all tracked replicas
-                if (command::is_write_command(result.args[0]) && !replicas_.empty()) {
+                if (command::is_write_command(cmd_name) && !replicas_.empty()) {
                     std::string propagated = resp::encode_array(result.args);
                     master_repl_offset_ += static_cast<int64_t>(propagated.size());
                     for (auto* replica: replicas_) {
@@ -279,10 +277,10 @@ void Server::connect_to_master(int listen_port) {
     
     // 8. Register master_fd_ with epoll as MASTER_CONN
     set_nonblocking(fd);
-    auto* master_client = new Client(fd, ClientType::MASTER_CONN);
+    master_client_ = new Client(fd, ClientType::MASTER_CONN);
     epoll_event mev{};
     mev.events = EPOLLIN;
-    mev.data.ptr = master_client;
+    mev.data.ptr = master_client_;
     epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &mev);
     
     std::cout << "Connected to master " << host << ":" << port << "\n";
@@ -299,6 +297,125 @@ void Server::send_and_expect(int fd, const std::string& message, const std::stri
     if (n <= 0 || std::string(buf, n).find(expected) == std::string::npos) {
         close(fd);
         throw std::runtime_error("Expected '" + expected + "' from master");
+    }
+}
+
+// Replica-side: track replication stream bytes, respond to GETACK
+void Server::handle_master_read(Client* client, const std::vector<std::string>& args,
+                                const std::string& response, size_t bytes_consumed) {
+    repl_info_.master_repl_offset += bytes_consumed;
+
+    if (args.size() >= 2 && command::to_upper(args[0]) == "REPLCONF"
+        && command::to_upper(args[1]) == "GETACK") {
+        client->write_buf += response;
+    }
+}
+
+// Master-side: parse REPLCONF ACK from replica, update offset
+void Server::handle_replica_read(Client* client, const std::vector<std::string>& args) {
+    if (args.size() >= 3 && command::to_upper(args[0]) == "REPLCONF"
+        && command::to_upper(args[1]) == "ACK") {
+        client->ack_offset = client->repl_base_offset + std::stoll(args[2]);
+        resolve_pending_waits();
+    }
+}
+
+// Disconnect all tracked replicas (for role change to replica)
+void Server::disconnect_all_replicas() {
+    auto replicas_copy = replicas_;
+    for (auto* replica : replicas_copy) {
+        remove_client(replica);
+    }
+}
+
+// Dispatch REPLICAOF — route NO ONE vs host/port
+void Server::handle_replicaof(Client* client, const std::vector<std::string>& args) {
+    std::string arg1 = command::to_upper(args[1]);
+    std::string arg2 = command::to_upper(args[2]);
+    if (arg1 == "NO" && arg2 == "ONE") {
+        handle_replicaof_no_one(client);
+    } else {
+        handle_replicaof_set_master(client, args[1], std::stoi(args[2]));
+    }
+}
+
+// REPLICAOF NO ONE — promote replica to master
+void Server::handle_replicaof_no_one(Client* client) {
+    if (repl_info_.role == "master") {
+        client->write_buf += "+OK\r\n";
+        try_send(client);
+        return;
+    }
+
+    // Tear down master connection
+    if (master_client_) {
+        remove_client(master_client_);
+        master_client_ = nullptr;
+        master_fd_ = -1;
+    }
+
+    // Flip role to master
+    repl_info_.role = "master";
+    repl_info_.master_repl_offset = 0;
+    repl_info_.master_host = "";
+    repl_info_.master_port = 0;
+    replicaof_ = std::nullopt;
+
+    client->write_buf += "+OK\r\n";
+    try_send(client);
+    std::cout << "MASTER MODE enabled (REPLICAOF NO ONE)\n";
+}
+
+// REPLICAOF host port — become replica of new master (or switch masters)
+void Server::handle_replicaof_set_master(Client* client, const std::string& host, int port) {
+    // Already connected to same master — no-op
+    if (replicaof_ && replicaof_->first == host && replicaof_->second == port) {
+        client->write_buf += "+OK Already connected to specified master\r\n";
+        try_send(client);
+        return;
+    }
+
+    // Tear down: disconnect replicas if we were master
+    if (repl_info_.role == "master") {
+        // Resolve all pending WAITs with current count before disconnecting
+        for (auto& ws : pending_waits_) {
+            int caught_up = count_caught_up_replicas(ws.target_offset);
+            ws.client->write_buf += ":" + std::to_string(caught_up) + "\r\n";
+            try_send(ws.client);
+        }
+        pending_waits_.clear();
+        disconnect_all_replicas();
+        master_repl_offset_ = 0;
+    }
+
+    // Tear down: close old master connection if we were a replica
+    if (master_client_) {
+        remove_client(master_client_);
+        master_client_ = nullptr;
+        master_fd_ = -1;
+    }
+
+    // Update role and master info
+    repl_info_.role = "worker";
+    repl_info_.master_repl_offset = 0;
+    repl_info_.master_host = host;
+    repl_info_.master_port = port;
+    replicaof_ = {host, port};
+
+    // Send OK before blocking handshake so client gets a response
+    client->write_buf += "+OK\r\n";
+    try_send(client);
+
+    // Blocking handshake with new master (reuses existing connect_to_master)
+    try {
+        connect_to_master(port);
+    } catch (const std::runtime_error& e) {
+        std::cerr << "REPLICAOF failed: " << e.what() << "\n";
+        // Revert to master on failure — can't be a replica without a master
+        repl_info_.role = "master";
+        repl_info_.master_host = "";
+        repl_info_.master_port = 0;
+        replicaof_ = std::nullopt;
     }
 }
 
