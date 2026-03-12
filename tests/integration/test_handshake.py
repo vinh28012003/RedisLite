@@ -77,7 +77,7 @@ def test_replica_fails_when_master_sends_wrong_response():
     assert returncode != 0
 
 def test_master_handles_psync_command():
-    """Master responds to PSYNC ? -1 with +FULLRESYNC <repl_id> 0 followed by empty RDB."""
+    """Master responds to PSYNC ? -1 with +FULLRESYNC <repl_id> <offset> followed by empty RDB."""
     import re
 
     sock = socket.create_connection(("127.0.0.1", 6379), timeout=2)
@@ -89,7 +89,8 @@ def test_master_handles_psync_command():
         crlf_pos = response.index(b"\r\n")
         fullresync_line = response[:crlf_pos].decode()
 
-        match = re.match(r"\+FULLRESYNC ([0-9a-f]{40}) 0", fullresync_line)
+        # Offset may be non-zero if other tests wrote data before this test
+        match = re.match(r"\+FULLRESYNC ([0-9a-f]{40}) (\d+)", fullresync_line)
         assert match is not None, f"Unexpected FULLRESYNC format: {fullresync_line}"
 
         # After FULLRESYNC line: $88\r\n<88 bytes>

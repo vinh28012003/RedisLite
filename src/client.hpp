@@ -9,6 +9,5 @@ struct Client {
     std::string read_buf;
     std::string write_buf;
     int64_t ack_offset = 0;
-    int64_t repl_base_offset = 0; 
     Client(int fd, ClientType type) : fd(fd), type(type) {}
 };

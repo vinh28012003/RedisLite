@@ -5,8 +5,9 @@
 #include <optional>
 #include <utility>
 #include <chrono>  
-#include "store.hpp"                                                                                    
+#include "store.hpp"
 #include "replication_info.hpp"
+#include "replication_backlog.hpp"
 #include <vector>
 
 struct Client;
@@ -29,6 +30,7 @@ class Server {
     Client* master_client_ = nullptr;  // Client wrapping master_fd_ (for cleanup)
     std::vector<Client*> replicas_;
     int64_t master_repl_offset_ = 0;       // Bytes propagated to replicas (master-side)
+    ReplicationBacklog backlog_;            // Circular buffer for partial resync
     std::vector<WaitState> pending_waits_;  // Clients blocked on WAIT
 
     static constexpr int MAX_EVENTS = 64;
@@ -53,8 +55,9 @@ public:
     void run();
 
 private:
-    void send_and_expect(int fd, const std::string& message, const std::string& expected);
+    std::string send_and_recv(int fd, const std::string& message);
     void connect_to_master(int listen_port);
+    void handle_psync(Client* client, const std::vector<std::string>& args);
     void handle_replicaof(Client* client, const std::vector<std::string>& args);
     void handle_replicaof_no_one(Client* client);
     void handle_replicaof_set_master(Client* client, const std::string& host, int port);
