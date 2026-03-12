@@ -15,6 +15,21 @@
 #include <netdb.h>
 #include <algorithm>
 
+// Empty RDB file (88 bytes) — hardcoded for empty database
+static const uint8_t EMPTY_RDB[] = {
+    0x52, 0x45, 0x44, 0x49, 0x53, 0x30, 0x30, 0x31, 0x31,
+    0xfa, 0x09, 0x72, 0x65, 0x64, 0x69, 0x73, 0x2d, 0x76, 0x65, 0x72, 0x05,
+    0x37, 0x2e, 0x32, 0x2e, 0x30,
+    0xfa, 0x0a, 0x72, 0x65, 0x64, 0x69, 0x73, 0x2d, 0x62, 0x69, 0x74, 0x73,
+    0xc0, 0x40,
+    0xfa, 0x05, 0x63, 0x74, 0x69, 0x6d, 0x65, 0xc2, 0x6d, 0x08, 0xbc, 0x65,
+    0xfa, 0x08, 0x75, 0x73, 0x65, 0x64, 0x2d, 0x6d, 0x65, 0x6d, 0xc2, 0xb0,
+    0xc4, 0x10, 0x00,
+    0xfa, 0x08, 0x61, 0x6f, 0x66, 0x2d, 0x62, 0x61, 0x73, 0x65, 0xc0, 0x00,
+    0xff,
+    0xf0, 0x6e, 0x3b, 0xfe, 0xc0, 0xff, 0x5a, 0xa2
+};
+
 void Server::set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     fcntl(fd, F_SETFL, flags | O_NONBLOCK);
@@ -117,8 +132,7 @@ void Server::handle_read(Client* client) {
 
         // Pipelining loop — process all complete commands
         while (true) {
-            auto result = resp::parse(client->read_buf.data(),
-                                    client->read_buf.size());
+            auto result = resp::parse(client->read_buf.data(), client->read_buf.size());
             if (result.bytes_consumed == 0) break;  // incomplete, wait
 
             bool from_master = (client->type == ClientType::MASTER_CONN);
@@ -131,29 +145,25 @@ void Server::handle_read(Client* client) {
             } else {
                 std::string cmd_name = result.args.empty() ? "" : command::to_upper(result.args[0]);
 
-                // WAIT returns empty — server handles it
                 if (cmd_name == "WAIT" && response.empty()) {
                     handle_wait(client, result.args);
                 } else if (cmd_name == "REPLICAOF" && response.empty()) {
                     handle_replicaof(client, result.args);
                     client->read_buf.erase(0, result.bytes_consumed);
-                    continue;  // skip propagation — REPLICAOF is not a write command
+                    continue;
+                } else if (cmd_name == "PSYNC" && response.empty()) {
+                    handle_psync(client, result.args);
                 } else {
                     client->write_buf += response;
                 }
 
-                // Tag PSYNC sender as REPLICA and track for propagation
-                if (cmd_name == "PSYNC") {
-                    client->type = ClientType::REPLICA;
-                    client->repl_base_offset = master_repl_offset_;
-                    replicas_.push_back(client);
-                }
-
-                // Propagate write commands to all tracked replicas
-                if (command::is_write_command(cmd_name) && !replicas_.empty()) {
+                // Track offset + feed backlog for all writes (even with no replicas)
+                if (command::is_write_command(cmd_name)) {
                     std::string propagated = resp::encode_array(result.args);
+                    int64_t pre_offset = master_repl_offset_;
                     master_repl_offset_ += static_cast<int64_t>(propagated.size());
-                    for (auto* replica: replicas_) {
+                    backlog_.feed(propagated, pre_offset);
+                    for (auto* replica : replicas_) {
                         replica->write_buf += propagated;
                         try_send(replica);
                     }
@@ -230,45 +240,81 @@ void Server::connect_to_master(int listen_port) {
         throw std::runtime_error("Failed to connect to master " + host + ":" + std::to_string(port));
     }
     freeaddrinfo(result);
-    // 3. Handshake step 1 PING and recv
-    send_and_expect(fd, resp::encode_array({"PING"}), "+PONG");
-    
-    // 4. Handshale step 2 REPLCONF listening-port
-    send_and_expect(fd, resp::encode_array({"REPLCONF", "listening-port", std::to_string(listen_port)}), "+OK");
-    
-    // 5. Handshake step 3: REPLCONF capa psync2
-    send_and_expect(fd, resp::encode_array({"REPLCONF", "capa", "psync2"}), "+OK"); 
-
-    // 6. Hand Shake step 4: PSYNC ? - 1 (request full resync)
-    std::string psync_msg = resp::encode_array({"PSYNC", "?", "-1"});                                   
-    if (send(fd, psync_msg.data(), psync_msg.size(), 0) < 0) {                                          
-        close(fd);                                            
-        throw std::runtime_error("Failed to send PSYNC to master");
+    // 3. PING
+    auto ping_resp = send_and_recv(fd, resp::encode_array({"PING"}));
+    if (ping_resp.find("+PONG") == std::string::npos) {
+        close(fd);
+        throw std::runtime_error("Expected +PONG from master");
     }
 
-    // 7. handles both FULLRESYNC parsing AND RDB consumption
-    char buf[4096];
-    std::string accumulated;
-    while (true) {
-        ssize_t n = recv(fd, buf, sizeof(buf), 0);
-        if (n <= 0) {
-            close(fd);
-            throw std::runtime_error("Failed to recv PSYNC response from master");
+    // 4. REPLCONF listening-port
+    auto rc1 = send_and_recv(fd, resp::encode_array({"REPLCONF", "listening-port", std::to_string(listen_port)}));
+    if (rc1.find("+OK") == std::string::npos) {
+        close(fd);
+        throw std::runtime_error("Expected +OK for REPLCONF listening-port");
+    }
+
+    // 5. REPLCONF capa psync2
+    auto rc2 = send_and_recv(fd, resp::encode_array({"REPLCONF", "capa", "psync2"}));
+    if (rc2.find("+OK") == std::string::npos) {
+        close(fd);
+        throw std::runtime_error("Expected +OK for REPLCONF capa");
+    }
+
+    // 6. PSYNC — send replid + offset for partial resync attempt
+    std::string psync_id = repl_info_.master_replid;
+    std::string psync_offset = std::to_string(repl_info_.master_repl_offset);
+    if (psync_id.empty() || repl_info_.master_repl_offset == 0) {
+        psync_id = "?";
+        psync_offset = "-1";
+    }
+    auto psync_resp = send_and_recv(fd, resp::encode_array({"PSYNC", psync_id, psync_offset}));
+
+    // 7. Handle CONTINUE (partial resync) vs FULLRESYNC
+    if (psync_resp.find("+CONTINUE") != std::string::npos) {
+        // Partial resync — no RDB, keep existing data
+        // Any trailing data after +CONTINUE\r\n is replayed commands (handled by event loop)
+        std::cout << "Partial resync accepted by master\n";
+    } else if (psync_resp.find("+FULLRESYNC") != std::string::npos) {
+        // Parse replid + offset: +FULLRESYNC <replid> <offset>\r\n
+        auto space1 = psync_resp.find(' ');
+        auto space2 = psync_resp.find(' ', space1 + 1);
+        auto crlf = psync_resp.find("\r\n");
+        if (space1 != std::string::npos && space2 != std::string::npos && crlf != std::string::npos) {
+            repl_info_.master_replid = psync_resp.substr(space1 + 1, space2 - space1 - 1);
+            repl_info_.master_repl_offset = std::stoll(psync_resp.substr(space2 + 1, crlf - space2 - 1));
         }
-        accumulated.append(buf, n);
 
-        if (accumulated.find("+FULLRESYNC") == std::string::npos) continue;
-
-        auto dollar = accumulated.find('$');
-        if (dollar == std::string::npos) continue;
-
-        auto rdb_header_end = accumulated.find("\r\n", dollar);
-        if (rdb_header_end == std::string::npos) continue;
-
-        int rdb_len = std::stoi(accumulated.substr(dollar + 1, rdb_header_end - dollar - 1));
-        size_t rdb_start = rdb_header_end + 2;
-
-        if (accumulated.size() >= rdb_start + rdb_len) break;
+        // Consume RDB — may need additional recv calls
+        std::string accumulated = psync_resp;
+        char buf[4096];
+        while (true) {
+            auto dollar = accumulated.find('$');
+            if (dollar == std::string::npos) {
+                ssize_t n = recv(fd, buf, sizeof(buf), 0);
+                if (n <= 0) { close(fd); throw std::runtime_error("Failed to recv RDB from master"); }
+                accumulated.append(buf, n);
+                continue;
+            }
+            auto rdb_header_end = accumulated.find("\r\n", dollar);
+            if (rdb_header_end == std::string::npos) {
+                ssize_t n = recv(fd, buf, sizeof(buf), 0);
+                if (n <= 0) { close(fd); throw std::runtime_error("Failed to recv RDB from master"); }
+                accumulated.append(buf, n);
+                continue;
+            }
+            int rdb_len = std::stoi(accumulated.substr(dollar + 1, rdb_header_end - dollar - 1));
+            size_t rdb_start = rdb_header_end + 2;
+            while (accumulated.size() < rdb_start + rdb_len) {
+                ssize_t n = recv(fd, buf, sizeof(buf), 0);
+                if (n <= 0) { close(fd); throw std::runtime_error("Failed to recv RDB from master"); }
+                accumulated.append(buf, n);
+            }
+            break;
+        }
+    } else {
+        close(fd);
+        throw std::runtime_error("Unexpected PSYNC response from master");
     }
     
     master_fd_ = fd;
@@ -284,18 +330,19 @@ void Server::connect_to_master(int listen_port) {
     std::cout << "Connected to master " << host << ":" << port << "\n";
 }
 
-void Server::send_and_expect(int fd, const std::string& message, const std::string& expected) {
+std::string Server::send_and_recv(int fd, const std::string& message) {
     if (send(fd, message.data(), message.size(), 0) < 0) {
         close(fd);
         throw std::runtime_error("Failed to send to master");
     }
 
-    char buf[256];
+    char buf[4096];
     ssize_t n = recv(fd, buf, sizeof(buf), 0);
-    if (n <= 0 || std::string(buf, n).find(expected) == std::string::npos) {
+    if (n <= 0) {
         close(fd);
-        throw std::runtime_error("Expected '" + expected + "' from master");
+        throw std::runtime_error("No response from master");
     }
+    return std::string(buf, n);
 }
 
 // Replica-side: track replication stream bytes, respond to GETACK
@@ -313,9 +360,42 @@ void Server::handle_master_read(Client* client, const std::vector<std::string>& 
 void Server::handle_replica_read(Client* client, const std::vector<std::string>& args) {
     if (args.size() >= 3 && command::to_upper(args[0]) == "REPLCONF"
         && command::to_upper(args[1]) == "ACK") {
-        client->ack_offset = client->repl_base_offset + std::stoll(args[2]);
+        client->ack_offset = std::stoll(args[2]);
         resolve_pending_waits();
     }
+}
+
+void Server::handle_psync(Client* client, const std::vector<std::string>& args) {
+    std::string id = (args.size() >= 2) ? args[1] : "?";
+    int64_t offset = -1;
+    if (args.size() >= 3 && args[2] != "-1") {
+        try { offset = std::stoll(args[2]); }
+        catch (...) { offset = -1; }
+    }
+
+    // Partial resync: id matches + offset within backlog
+    if (id != "?" && offset >= 0) {
+        bool id_match = (id == repl_info_.master_replid) || (id == repl_info_.master_replid2 && offset <= repl_info_.second_repl_offset);
+
+        if (id_match && backlog_.contains(offset)) {
+            client->write_buf += "+CONTINUE " + repl_info_.master_replid + "\r\n";
+            std::string replay = backlog_.read(offset);
+            if (!replay.empty()) client->write_buf += replay;
+
+            client->type = ClientType::REPLICA;
+            replicas_.push_back(client);
+            return;
+        }
+    }
+
+    // Full resync: fresh replica, id mismatch, or offset outside backlog
+    std::string response = "+FULLRESYNC " + repl_info_.master_replid + " " + std::to_string(master_repl_offset_) + "\r\n";
+    response += "$" + std::to_string(sizeof(EMPTY_RDB)) + "\r\n";
+    response.append(reinterpret_cast<const char*>(EMPTY_RDB), sizeof(EMPTY_RDB));
+    client->write_buf += response;
+
+    client->type = ClientType::REPLICA;
+    replicas_.push_back(client);
 }
 
 // Disconnect all tracked replicas (for role change to replica)
@@ -357,12 +437,16 @@ void Server::handle_replicaof_no_one(Client* client) {
     repl_info_.second_repl_offset = repl_info_.master_repl_offset;
     repl_info_.master_replid = generate_replid();
 
-    // Flip role to master
+    // Flip role to master, preserving offset continuity for partial resync
     repl_info_.role = "master";
     repl_info_.master_repl_offset = 0;
     repl_info_.master_host = "";
     repl_info_.master_port = 0;
     replicaof_ = std::nullopt;
+
+    // Initialize offset + backlog so siblings can partial-resync
+    master_repl_offset_ = repl_info_.second_repl_offset;
+    backlog_.set_start(repl_info_.second_repl_offset);
 
     client->write_buf += "+OK\r\n";
     try_send(client);

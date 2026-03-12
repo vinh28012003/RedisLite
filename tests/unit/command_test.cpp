@@ -239,30 +239,19 @@ TEST(Command, ReplconfCapaReturnsOk) {
     EXPECT_EQ(result, "+OK\r\n");
 }
 
-TEST(Command, PsyncReturnsFulresync) {                                                                                        
-    Store store;                                                                                                                
-    ReplicationInfo repl_info{"master", "8371445fff7e1767aab63d5e534e3492a8ee2ee6", 0};                                         
+// PSYNC is now server-handled — command layer returns empty
+TEST(Command, PsyncReturnsEmptyForServerHandling) {
+    Store store;
+    ReplicationInfo repl_info{"master", "8371445fff7e1767aab63d5e534e3492a8ee2ee6", 0};
     auto result = command::execute({"PSYNC", "?", "-1"}, store, repl_info);
-
-    // Verify FULLRESYNC prefix
-    EXPECT_EQ(result.substr(0, 56), "+FULLRESYNC 8371445fff7e1767aab63d5e534e3492a8ee2ee6 0\r\n");
-
-    // Verify RDB transfer: $88\r\n + 88 binary bytes, no trailing \r\n
-    std::string rdb_part = result.substr(56);
-    EXPECT_EQ(rdb_part.substr(0, 5), "$88\r\n");
-    EXPECT_EQ(rdb_part.size(), 5 + 88);  // "$88\r\n" + 88 bytes
-    EXPECT_EQ(static_cast<uint8_t>(rdb_part[5]), 0x52);  // 'R' — first byte of "REDIS"
-    EXPECT_EQ(static_cast<uint8_t>(rdb_part[6]), 0x45);  // 'E'
+    EXPECT_EQ(result, "");
 }
 
-TEST(Command, PsyncIgnoresArgsForNow) {
+TEST(Command, PsyncWithArgsReturnsEmpty) {
     Store store;
     ReplicationInfo repl_info{"master", "8371445fff7e1767aab63d5e534e3492a8ee2ee6", 0};
     auto result = command::execute({"PSYNC", "abc123", "100"}, store, repl_info);
-
-    EXPECT_TRUE(result.find("+FULLRESYNC 8371445fff7e1767aab63d5e534e3492a8ee2ee6 0\r\n") == 0);
-    // Total: 56 (FULLRESYNC line) + 5 ($88\r\n) + 88 (binary) = 149 bytes
-    EXPECT_EQ(result.size(), 149);
+    EXPECT_EQ(result, "");
 }
 
 
@@ -519,12 +508,9 @@ TEST(Command, InfoReportsNonDefaultReplid2) {
     EXPECT_NE(response.find("second_repl_offset:500"), std::string::npos);
 }
 
-TEST(Command, PsyncReturnsCurrentReplidNotReplid2) {
+TEST(Command, PsyncReturnsEmptyRegardlessOfReplid) {
     Store store;
-    ReplicationInfo repl{"master", "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111", 0, "", 0,
-                         "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222", 500};
+    ReplicationInfo repl{"master", "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111", 0, "", 0, "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222", 500};
     auto result = command::execute({"PSYNC", "?", "-1"}, store, repl);
-    // FULLRESYNC should use current replid, not replid2
-    EXPECT_TRUE(result.find("+FULLRESYNC aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111 0\r\n") == 0);
-    EXPECT_EQ(result.find("bbbb2222"), std::string::npos);  // replid2 should NOT appear
+    EXPECT_EQ(result, "");
 }
