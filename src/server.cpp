@@ -182,9 +182,7 @@ void Server::handle_write(Client* client) {
 
 void Server::try_send(Client* client) {
     while (!client->write_buf.empty()) {
-        ssize_t sent = send(client->fd,
-                            client->write_buf.data(),
-                            client->write_buf.size(), 0);
+        ssize_t sent = send(client->fd, client->write_buf.data(), client->write_buf.size(), 0);
         if (sent > 0) {
             client->write_buf.erase(0, sent);
         } else {
@@ -353,6 +351,11 @@ void Server::handle_replicaof_no_one(Client* client) {
         master_client_ = nullptr;
         master_fd_ = -1;
     }
+
+    // Shift replication IDs: current → secondary, generate new primary
+    repl_info_.master_replid2 = repl_info_.master_replid;
+    repl_info_.second_repl_offset = repl_info_.master_repl_offset;
+    repl_info_.master_replid = generate_replid();
 
     // Flip role to master
     repl_info_.role = "master";

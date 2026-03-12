@@ -5,7 +5,7 @@
 #include "replication_info.hpp"
 #include "resp_parser.hpp"
 
-static const ReplicationInfo DEFAULT_REPL{"master", "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb", 0};
+static const ReplicationInfo DEFAULT_REPL{"master", "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb", 0, "", 0, std::string(40, '0'), -1};
 
 // --- Dispatch: empty/unknown ---                                                                      
                                                                                                         
@@ -134,6 +134,12 @@ TEST(Command, SetWithInvalidPxReturnsError) {
     EXPECT_EQ(response, "-ERR value is not an integer or out of range\r\n");
 }
 
+TEST(Command, SetWithInvalidExReturnsError) {
+    Store store;
+    auto response = command::execute({"SET", "foo", "bar", "EX", "notanumber"}, store, DEFAULT_REPL);
+    EXPECT_EQ(response, "-ERR value is not an integer or out of range\r\n");
+}
+
 // --- Store: active expiration (evict_expired) ---
 
 TEST(Command, EvictExpiredRemovesKeys) {
@@ -183,7 +189,7 @@ TEST(Command, InfoUnknownSectionReturnsEmptyBulk) {
 
 TEST(Command, InfoReplicationReturnsReplicaRole) {
     Store store;
-    ReplicationInfo replica_info{"worker", "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb", 0};
+    ReplicationInfo replica_info{"worker", "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb", 0, "localhost", 6379};
     auto response = command::execute({"INFO", "replication"}, store, replica_info);
     EXPECT_NE(response.find("role:worker"), std::string::npos);
 }
@@ -193,7 +199,9 @@ TEST(Command, InfoReplicationReturnsBulkStringFormat) {
     auto response = command::execute({"INFO", "replication"}, store, DEFAULT_REPL);
     std::string expected = "role:master\r\n"
                            "master_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\r\n"
-                           "master_repl_offset:0";
+                           "master_repl_offset:0\r\n"
+                           "master_replid2:" + std::string(40, '0') + "\r\n"
+                           "second_repl_offset:-1";
     EXPECT_EQ(response, resp::encode_bulk_string(expected));
 }
 
@@ -467,4 +475,56 @@ TEST(Command, ReplicaofZeroPortReturnsError) {
     Store store;
     auto result = command::execute({"REPLICAOF", "localhost", "0"}, store, DEFAULT_REPL);
     EXPECT_EQ(result, "-ERR Invalid master port\r\n");
+}
+
+// --- generate_replid ---
+
+TEST(ReplicationInfo, GenerateReplidReturns40Chars) {
+    auto id = generate_replid();
+    EXPECT_EQ(id.size(), 40);
+}
+
+TEST(ReplicationInfo, GenerateReplidAllHex) {
+    auto id = generate_replid();
+    for (char c : id) {
+        EXPECT_TRUE((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+    }
+}
+
+TEST(ReplicationInfo, GenerateReplidUnique) {
+    auto id1 = generate_replid();
+    auto id2 = generate_replid();
+    EXPECT_NE(id1, id2);
+}
+
+// --- INFO with dual replication IDs ---
+
+TEST(Command, InfoContainsReplid2) {
+    Store store;
+    auto response = command::execute({"INFO", "replication"}, store, DEFAULT_REPL);
+    EXPECT_NE(response.find("master_replid2:" + std::string(40, '0')), std::string::npos);
+}
+
+TEST(Command, InfoContainsSecondReplOffset) {
+    Store store;
+    auto response = command::execute({"INFO", "replication"}, store, DEFAULT_REPL);
+    EXPECT_NE(response.find("second_repl_offset:-1"), std::string::npos);
+}
+
+TEST(Command, InfoReportsNonDefaultReplid2) {
+    Store store;
+    ReplicationInfo repl{"master", "aaaa", 0, "", 0, "bbbb", 500};
+    auto response = command::execute({"INFO", "replication"}, store, repl);
+    EXPECT_NE(response.find("master_replid2:bbbb"), std::string::npos);
+    EXPECT_NE(response.find("second_repl_offset:500"), std::string::npos);
+}
+
+TEST(Command, PsyncReturnsCurrentReplidNotReplid2) {
+    Store store;
+    ReplicationInfo repl{"master", "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111", 0, "", 0,
+                         "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222", 500};
+    auto result = command::execute({"PSYNC", "?", "-1"}, store, repl);
+    // FULLRESYNC should use current replid, not replid2
+    EXPECT_TRUE(result.find("+FULLRESYNC aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111 0\r\n") == 0);
+    EXPECT_EQ(result.find("bbbb2222"), std::string::npos);  // replid2 should NOT appear
 }

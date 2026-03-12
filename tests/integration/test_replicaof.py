@@ -1,7 +1,9 @@
 """
-Integration tests for ROLE, REPLICAOF, and replica-read-only (Phase 2).
+Integration tests for ROLE, REPLICAOF, replica-read-only (Phase 2),
+and dual replication IDs (Phase 3).
 Uses function-scoped replicas since REPLICAOF changes server state.
 """
+import re
 import socket
 import time
 import subprocess
@@ -171,3 +173,133 @@ class TestReplicaofSetMaster:
     def test_replicaof_error_port_out_of_range(self):
         resp = send_command(MASTER_HOST, MASTER_PORT, "REPLICAOF", "localhost", "99999")
         assert "ERR" in resp
+
+    def test_replicaof_same_master_is_noop(self, replica_6383):
+        """REPLICAOF to current master returns OK, stays replica."""
+        resp = send_command(MASTER_HOST, REPLICAOF_PORT, "REPLICAOF", "localhost", "6379")
+        assert "OK" in resp
+        # Still a replica
+        resp = send_command(MASTER_HOST, REPLICAOF_PORT, "ROLE")
+        assert "slave" in resp
+
+    def test_replicaof_unreachable_host_reverts_to_master(self):
+        """REPLICAOF to unreachable host fails handshake, server reverts to master."""
+        # Start as master on port 6383 (no --replicaof)
+        _kill_replica(REPLICAOF_PORT)
+        proc = subprocess.Popen(
+            ["docker", "compose", "-f", "docker/docker-compose.yml",
+             "exec", "-T", "redis-lite",
+             "./build/redis-lite", "--port", str(REPLICAOF_PORT)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        try:
+            wait_for_ready(MASTER_HOST, REPLICAOF_PORT)
+        except TimeoutError:
+            _kill_replica(REPLICAOF_PORT)
+            proc.kill()
+            pytest.fail(f"server failed to start on port {REPLICAOF_PORT}")
+
+        try:
+            # Verify starts as master
+            resp = send_command(MASTER_HOST, REPLICAOF_PORT, "ROLE")
+            assert "master" in resp
+
+            # Try to become replica of localhost on a port nothing listens on
+            # connect() will fail fast with ECONNREFUSED (not a slow TCP timeout)
+            resp = send_command(MASTER_HOST, REPLICAOF_PORT, "REPLICAOF", "localhost", "1")
+            assert "OK" in resp  # OK sent before blocking handshake
+
+            # Give time for handshake to fail and revert
+            time.sleep(1)
+
+            # Should have reverted to master
+            resp = send_command(MASTER_HOST, REPLICAOF_PORT, "ROLE")
+            assert "master" in resp
+        finally:
+            _kill_replica(REPLICAOF_PORT)
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+
+
+# --- Dual Replication IDs (Phase 3) ---
+
+def _parse_info_field(info_resp, field):
+    """Extract a field value from INFO response body."""
+    match = re.search(rf"{field}:([^\r\n]+)", info_resp)
+    return match.group(1) if match else None
+
+
+class TestDualReplid:
+    def test_fresh_master_has_random_replid(self):
+        resp = send_command(MASTER_HOST, MASTER_PORT, "INFO", "replication")
+        replid = _parse_info_field(resp, "master_replid")
+        assert replid is not None
+        assert len(replid) == 40
+        assert re.match(r"^[0-9a-f]{40}$", replid)
+
+    def test_fresh_master_replid2_is_zeros(self):
+        resp = send_command(MASTER_HOST, MASTER_PORT, "INFO", "replication")
+        replid2 = _parse_info_field(resp, "master_replid2")
+        assert replid2 == "0" * 40
+
+    def test_fresh_master_second_offset_is_negative_one(self):
+        resp = send_command(MASTER_HOST, MASTER_PORT, "INFO", "replication")
+        offset = _parse_info_field(resp, "second_repl_offset")
+        assert offset == "-1"
+
+    def test_promotion_shifts_replid(self, replica_6383):
+        # Get replica's replid before promotion (inherited from master)
+        resp_before = send_command(MASTER_HOST, REPLICAOF_PORT, "INFO", "replication")
+        replid_before = _parse_info_field(resp_before, "master_replid")
+
+        # Promote
+        send_command(MASTER_HOST, REPLICAOF_PORT, "REPLICAOF", "NO", "ONE")
+
+        # Get IDs after promotion
+        resp_after = send_command(MASTER_HOST, REPLICAOF_PORT, "INFO", "replication")
+        replid_after = _parse_info_field(resp_after, "master_replid")
+        replid2_after = _parse_info_field(resp_after, "master_replid2")
+
+        # New replid should be different from old
+        assert replid_after != replid_before
+        assert len(replid_after) == 40
+
+        # Old replid should now be replid2
+        assert replid2_after == replid_before
+
+    def test_promotion_sets_second_offset(self, replica_6383):
+        # Promote
+        send_command(MASTER_HOST, REPLICAOF_PORT, "REPLICAOF", "NO", "ONE")
+
+        resp = send_command(MASTER_HOST, REPLICAOF_PORT, "INFO", "replication")
+        offset = _parse_info_field(resp, "second_repl_offset")
+        # Offset should be >= 0 (was the replica's offset at promotion time)
+        assert int(offset) >= 0
+
+    def test_new_replid_after_promotion_is_valid_hex(self, replica_6383):
+        send_command(MASTER_HOST, REPLICAOF_PORT, "REPLICAOF", "NO", "ONE")
+        resp = send_command(MASTER_HOST, REPLICAOF_PORT, "INFO", "replication")
+        replid = _parse_info_field(resp, "master_replid")
+        assert re.match(r"^[0-9a-f]{40}$", replid)
+
+    def test_no_one_on_master_preserves_replid(self):
+        # Get replid before no-op
+        resp_before = send_command(MASTER_HOST, MASTER_PORT, "INFO", "replication")
+        replid_before = _parse_info_field(resp_before, "master_replid")
+        replid2_before = _parse_info_field(resp_before, "master_replid2")
+
+        # No-op REPLICAOF NO ONE on master
+        send_command(MASTER_HOST, MASTER_PORT, "REPLICAOF", "NO", "ONE")
+
+        # IDs should not change
+        resp_after = send_command(MASTER_HOST, MASTER_PORT, "INFO", "replication")
+        assert _parse_info_field(resp_after, "master_replid") == replid_before
+        assert _parse_info_field(resp_after, "master_replid2") == replid2_before
+
+    def test_replica_info_has_replid2_fields(self, replica_6383):
+        resp = send_command(MASTER_HOST, REPLICAOF_PORT, "INFO", "replication")
+        assert "master_replid2:" in resp
+        assert "second_repl_offset:" in resp

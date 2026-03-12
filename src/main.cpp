@@ -12,7 +12,7 @@ int main(int argc, char* argv[]) {
     Config cfg = parse_config(argc, argv);
     ReplicationInfo repl_info{
       cfg.replicaof ? "worker" : "master",
-      "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
+      generate_replid(),
       0,
       cfg.replicaof ? cfg.replicaof->first : "",
       cfg.replicaof ? cfg.replicaof->second : 0

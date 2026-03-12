@@ -54,7 +54,11 @@ std::string execute(const std::vector<std::string>& args, Store &store, const Re
         std::string section = (args.size() >= 2) ? to_upper(args[1]) : "";
 
         if (section.empty() || section == "REPLICATION") {
-            std::string body = "role:" + repl_info.role + "\r\n" + "master_replid:" + repl_info.master_replid + "\r\n" + "master_repl_offset:" + std::to_string(repl_info.master_repl_offset);
+            std::string body = "role:" + repl_info.role
+                + "\r\nmaster_replid:" + repl_info.master_replid
+                + "\r\nmaster_repl_offset:" + std::to_string(repl_info.master_repl_offset)
+                + "\r\nmaster_replid2:" + repl_info.master_replid2
+                + "\r\nsecond_repl_offset:" + std::to_string(repl_info.second_repl_offset);
             return resp::encode_bulk_string(body);
         }
 
@@ -132,6 +136,9 @@ std::string execute(const std::vector<std::string>& args, Store &store, const Re
     }
 
     if (cmd == "PSYNC") {
+        // Identity check: does incoming replid match our primary or secondary?
+        // If match + valid offset, Phase 4 will return +CONTINUE (partial resync).
+        // For now, always FULLRESYNC — no backlog buffer yet.
         std::string response = "+FULLRESYNC " + repl_info.master_replid + " 0\r\n";
         response += "$" + std::to_string(sizeof(EMPTY_RDB)) + "\r\n";
         response.append(reinterpret_cast<const char*>(EMPTY_RDB), sizeof(EMPTY_RDB));
