@@ -2,6 +2,7 @@
 #include "client.hpp"
 #include "resp_parser.hpp"
 #include "command.hpp"
+#include "rdb.hpp"
 
 #include <iostream>
 #include <cstring>
@@ -15,20 +16,6 @@
 #include <netdb.h>
 #include <algorithm>
 
-// Empty RDB file (88 bytes) — hardcoded for empty database
-static const uint8_t EMPTY_RDB[] = {
-    0x52, 0x45, 0x44, 0x49, 0x53, 0x30, 0x30, 0x31, 0x31,
-    0xfa, 0x09, 0x72, 0x65, 0x64, 0x69, 0x73, 0x2d, 0x76, 0x65, 0x72, 0x05,
-    0x37, 0x2e, 0x32, 0x2e, 0x30,
-    0xfa, 0x0a, 0x72, 0x65, 0x64, 0x69, 0x73, 0x2d, 0x62, 0x69, 0x74, 0x73,
-    0xc0, 0x40,
-    0xfa, 0x05, 0x63, 0x74, 0x69, 0x6d, 0x65, 0xc2, 0x6d, 0x08, 0xbc, 0x65,
-    0xfa, 0x08, 0x75, 0x73, 0x65, 0x64, 0x2d, 0x6d, 0x65, 0x6d, 0xc2, 0xb0,
-    0xc4, 0x10, 0x00,
-    0xfa, 0x08, 0x61, 0x6f, 0x66, 0x2d, 0x62, 0x61, 0x73, 0x65, 0xc0, 0x00,
-    0xff,
-    0xf0, 0x6e, 0x3b, 0xfe, 0xc0, 0xff, 0x5a, 0xa2
-};
 
 void Server::set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -310,6 +297,15 @@ void Server::connect_to_master(int listen_port) {
                 if (n <= 0) { close(fd); throw std::runtime_error("Failed to recv RDB from master"); }
                 accumulated.append(buf, n);
             }
+            // Parse RDB and load into store (replaces previous discard)
+            std::string rdb_data(accumulated, rdb_start, rdb_len);
+            try {
+                rdb::load(rdb_data, store_);
+                std::cout << "RDB loaded: " << store_.size() << " keys\n";
+            } catch (const std::runtime_error& e) {
+                std::cerr << "RDB load failed: " << e.what() << ", continuing with empty store\n";
+                store_.clear();
+            }
             break;
         }
     } else {
@@ -389,9 +385,10 @@ void Server::handle_psync(Client* client, const std::vector<std::string>& args) 
     }
 
     // Full resync: fresh replica, id mismatch, or offset outside backlog
+    std::string rdb_bytes = rdb::serialize(store_);
     std::string response = "+FULLRESYNC " + repl_info_.master_replid + " " + std::to_string(master_repl_offset_) + "\r\n";
-    response += "$" + std::to_string(sizeof(EMPTY_RDB)) + "\r\n";
-    response.append(reinterpret_cast<const char*>(EMPTY_RDB), sizeof(EMPTY_RDB));
+    response += "$" + std::to_string(rdb_bytes.size()) + "\r\n";
+    response += rdb_bytes;
     client->write_buf += response;
 
     client->type = ClientType::REPLICA;

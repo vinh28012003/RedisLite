@@ -22,6 +22,8 @@ public:
     std::optional<std::string> get(const std::string &key);
     void evict_expired();
     size_t size() const;
+    const std::unordered_map<std::string, Entry>& data() const;  // read-only for RDB serialization
+    void clear();                                                  // wipe before RDB load
 };
 
 
