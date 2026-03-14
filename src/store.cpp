@@ -21,24 +21,26 @@ std::optional<std::string> Store::get(const std::string &key) {
 
     // Lazy expiration - check on access
     if (it->second.is_expired()) {
-        data_.erase(it);
         return std::nullopt;
     }
    
     return it->second.value;
 }
 
-void Store::evict_expired() {
+std::vector<std::string> Store::evict_expired() {
+    std::vector<std::string> expired;
     int checked = 0;
     auto it = data_.begin();
     while (it != data_.end() && checked < 20) {
         if (it->second.is_expired()) {
-            it = data_.erase(it);   // erase returns next valid iterator
+            expired.push_back(it->first);
+            it = data_.erase(it);
         } else {
             ++it;
         }
         checked++;
     }
+    return expired;
 }
 
 bool Store::del(const std::string& key) { return data_.erase(key) > 0; }

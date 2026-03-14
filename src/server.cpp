@@ -661,7 +661,20 @@ void Server::run() {
         }
 
         check_wait_timeouts();  // Expire past-deadline WAITs each iteration
-        store_.evict_expired();
+        // Master/standalone: sweep + propagate DEL
+        if (repl_info_.role == "master") {
+            auto expired = store_.evict_expired();
+            for (const auto &key : expired) {
+                std::string propagated = resp::encode_array({"DEL", key});
+                int64_t pre_offset = master_repl_offset_;
+                master_repl_offset_ += static_cast<int64_t>(propagated.size());
+                backlog_.feed(propagated, pre_offset);
+                for (auto* replica : replicas_) {
+                    replica->write_buf += propagated;
+                    try_send(replica);
+                }
+            }
+        }
     }
 
     std::cout << "Shutting down...\n";

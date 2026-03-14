@@ -4,6 +4,7 @@
 #include <unordered_map>                                                                                
 #include <optional>
 #include <chrono>
+#include <vector>
 
 struct Entry {
     std::string value;
@@ -20,7 +21,7 @@ class Store {
 public:
     void set(const std::string &key, const std::string &value, std::optional<int64_t> px_millis = std::nullopt);
     std::optional<std::string> get(const std::string &key);
-    void evict_expired();
+    std::vector<std::string> evict_expired();
     size_t size() const;
     const std::unordered_map<std::string, Entry>& data() const;  // read-only for RDB serialization
     bool del(const std::string& key);                               // returns true if key existed
