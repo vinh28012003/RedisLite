@@ -16,6 +16,7 @@
 #include <netdb.h>
 #include <algorithm>
 #include <csignal>
+#include <thread>
 
 static volatile sig_atomic_t g_running = 1;
 
@@ -84,6 +85,9 @@ Server::Server(int port, const ReplicationInfo& repl_info, std::optional<std::pa
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
+    // Start writer thread for replica fan-out
+    writer_thread_ = std::jthread([this](std::stop_token stop) { writer_loop(stop); });
+
     // -- Handshake with master (if replica) --
     if (replicaof_) {
         connect_to_master(port);
@@ -91,6 +95,11 @@ Server::Server(int port, const ReplicationInfo& repl_info, std::optional<std::pa
 }
 
 Server::~Server() {
+    // Stop writer thread before closing fds
+    writer_thread_.request_stop();
+    repl_cv_.notify_all();
+    // jthread destructor joins automatically
+
     close(listener_->fd);
     delete listener_;
     close(epoll_fd_);
@@ -162,10 +171,7 @@ void Server::handle_read(Client* client) {
                     master_repl_offset_ += static_cast<int64_t>(propagated.size());
                     repl_info_.master_repl_offset = master_repl_offset_;
                     backlog_.feed(propagated, pre_offset);
-                    for (auto* replica : replicas_) {
-                        replica->write_buf += propagated;
-                        try_send(replica);
-                    }
+                    propagate_to_replicas(propagated);
                 }
             }   
             client->read_buf.erase(0, result.bytes_consumed);
@@ -396,25 +402,42 @@ void Server::handle_psync(Client* client, const std::vector<std::string>& args) 
         bool id_match = (id == repl_info_.master_replid) || (id == repl_info_.master_replid2 && offset <= repl_info_.second_repl_offset);
 
         if (id_match && backlog_.contains(offset)) {
-            client->write_buf += "+CONTINUE " + repl_info_.master_replid + "\r\n";
+            std::string data = "+CONTINUE " + repl_info_.master_replid + "\r\n";
             std::string replay = backlog_.read(offset);
-            if (!replay.empty()) client->write_buf += replay;
+            if (!replay.empty()) data += replay;
 
             client->type = ClientType::REPLICA;
             replicas_.push_back(client);
+            // Create write queue and send via writer thread
+            auto queue = std::make_shared<ReplicaWriteQueue>();
+            queue->fd = client->fd;
+            queue->pending = std::move(data);
+            {
+                std::lock_guard lock(repl_mutex_);
+                repl_queues_[client] = queue;
+            }
+            notify_writer();
             return;
         }
     }
 
     // Full resync: fresh replica, id mismatch, or offset outside backlog
     std::string rdb_bytes = rdb::serialize(store_);
-    std::string response = "+FULLRESYNC " + repl_info_.master_replid + " " + std::to_string(master_repl_offset_) + "\r\n";
-    response += "$" + std::to_string(rdb_bytes.size()) + "\r\n";
-    response += rdb_bytes;
-    client->write_buf += response;
+    std::string data = "+FULLRESYNC " + repl_info_.master_replid + " " + std::to_string(master_repl_offset_) + "\r\n";
+    data += "$" + std::to_string(rdb_bytes.size()) + "\r\n";
+    data += rdb_bytes;
 
     client->type = ClientType::REPLICA;
     replicas_.push_back(client);
+    // Create write queue and send via writer thread
+    auto queue = std::make_shared<ReplicaWriteQueue>();
+    queue->fd = client->fd;
+    queue->pending = std::move(data);
+    {
+        std::lock_guard lock(repl_mutex_);
+        repl_queues_[client] = queue;
+    }
+    notify_writer();
 }
 
 // Disconnect all tracked replicas (for role change to replica)
@@ -538,6 +561,16 @@ void Server::remove_client(Client* client) {
     // Remove from replicas_ before close/delete to prevent dangling pointer
     replicas_.erase(std::remove(replicas_.begin(), replicas_.end(), client), replicas_.end());
 
+    // Mark replica queue as removed BEFORE closing fd (prevents fd-reuse race)
+    {
+        std::lock_guard lock(repl_mutex_);
+        auto it = repl_queues_.find(client);
+        if (it != repl_queues_.end()) {
+            it->second->removed = true;
+            repl_queues_.erase(it);
+        }
+    }
+
     // Remove from pending_waits_ if this client was blocked on WAIT
     pending_waits_.erase(
         std::remove_if(pending_waits_.begin(), pending_waits_.end(),
@@ -593,10 +626,7 @@ void Server::handle_wait(Client* client, const std::vector<std::string>& args) {
 
     // send REPLCONF GETACK * to all replicas, then park
     std::string getack = resp::encode_array({"REPLCONF", "GETACK", "*"});
-    for (auto* replica : replicas_) {
-        replica->write_buf += getack;
-        try_send(replica);
-    }
+    propagate_to_replicas(getack);
 
     // Park client — event loop will resolve when ACKs arrive or deadline expires
     auto deadline = (timeout_ms > 0)
@@ -670,14 +700,77 @@ void Server::run() {
                 int64_t pre_offset = master_repl_offset_;
                 master_repl_offset_ += static_cast<int64_t>(propagated.size());
                 backlog_.feed(propagated, pre_offset);
-                for (auto* replica : replicas_) {
-                    replica->write_buf += propagated;
-                    try_send(replica);
-                }
+                propagate_to_replicas(propagated);
             }
         }
     }
 
     std::cout << "Shutting down...\n";
+}
+
+// Append data to all replica queues — writer thread will send
+void Server::propagate_to_replicas(const std::string& data) {
+    if (replicas_.empty()) return;
+    std::lock_guard lock(repl_mutex_);
+    for (auto& [client, queue] : repl_queues_) {
+        queue->pending += data;
+    }
+    repl_has_work_ = true;
+    repl_cv_.notify_one();
+}
+
+void Server::notify_writer() {
+    repl_has_work_ = true;
+    repl_cv_.notify_one();
+}
+
+// Writer thread: drains replica pending buffers via send() syscalls
+void Server::writer_loop(std::stop_token stop) {
+    while (!stop.stop_requested()) {
+        // Wait for work or periodic wake-up (for draining remaining data)
+        {
+            std::unique_lock lock(repl_mutex_);
+            repl_cv_.wait_for(lock, std::chrono::milliseconds(10), [&] {
+                return repl_has_work_.load() || stop.stop_requested();
+            });
+            repl_has_work_ = false;
+        }
+
+        if (stop.stop_requested()) break;
+
+        // Take snapshot of queues + swap pending → draining (under lock)
+        std::vector<std::shared_ptr<ReplicaWriteQueue>> snapshot;
+        {
+            std::lock_guard lock(repl_mutex_);
+            for (auto& [client, queue] : repl_queues_) {
+                if (!queue->pending.empty()) {
+                    queue->draining += std::move(queue->pending);
+                    queue->pending.clear();
+                }
+                if (!queue->draining.empty()) {
+                    snapshot.push_back(queue);
+                }
+            }
+        }
+
+        // Send outside lock — this is the slow syscall path
+        for (auto& queue : snapshot) {
+            if (queue->removed) continue;
+
+            while (!queue->draining.empty()) {
+                ssize_t sent = send(queue->fd, queue->draining.data(),
+                                    queue->draining.size(), MSG_NOSIGNAL);
+                if (sent > 0) {
+                    queue->draining.erase(0, sent);
+                } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    break;  // try again next iteration
+                } else {
+                    // Send error — clear buffer, main thread detects disconnect via recv
+                    queue->draining.clear();
+                    break;
+                }
+            }
+        }
+    }
 }
 
