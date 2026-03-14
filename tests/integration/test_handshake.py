@@ -93,11 +93,13 @@ def test_master_handles_psync_command():
         match = re.match(r"\+FULLRESYNC ([0-9a-f]{40}) (\d+)", fullresync_line)
         assert match is not None, f"Unexpected FULLRESYNC format: {fullresync_line}"
 
-        # After FULLRESYNC line: $88\r\n<88 bytes>
+        # After FULLRESYNC line: $<len>\r\n<len bytes> (RDB snapshot)
         rdb_part = response[crlf_pos + 2:]
-        assert rdb_part[:5] == b"$88\r\n", f"Expected $88\\r\\n, got {rdb_part[:5]}"
-        rdb_binary = rdb_part[5:]
-        assert len(rdb_binary) == 88, f"Expected 88 bytes, got {len(rdb_binary)}"
+        assert rdb_part[0:1] == b"$", f"Expected $ prefix, got {rdb_part[0:1]}"
+        rdb_header_end = rdb_part.index(b"\r\n")
+        rdb_len = int(rdb_part[1:rdb_header_end])
+        rdb_binary = rdb_part[rdb_header_end + 2:]
+        assert len(rdb_binary) == rdb_len, f"Expected {rdb_len} bytes, got {len(rdb_binary)}"
         assert rdb_binary[:5] == b"REDIS", f"RDB should start with REDIS magic"
     finally:
         sock.close()

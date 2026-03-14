@@ -40,3 +40,7 @@ void Store::evict_expired() {
 }
 
 size_t Store::size() const { return data_.size(); }
+
+const std::unordered_map<std::string, Entry>& Store::data() const { return data_; }
+
+void Store::clear() { data_.clear(); }
