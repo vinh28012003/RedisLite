@@ -5,7 +5,9 @@ void Store::set(const std::string &key, const std::string &value, std::optional<
     entry.value = value;
 
     if (px_millis) {
+        
         entry.expiry = std::chrono::steady_clock::now() + std::chrono::milliseconds(*px_millis);
+        
     }
     // No px_millis -> entry.expiry stays null opt (no TTL)
     // This also clear any previous TTL on the key (Redis spec)
@@ -38,6 +40,8 @@ void Store::evict_expired() {
         checked++;
     }
 }
+
+bool Store::del(const std::string& key) { return data_.erase(key) > 0; }
 
 size_t Store::size() const { return data_.size(); }
 

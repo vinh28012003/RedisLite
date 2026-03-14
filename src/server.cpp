@@ -15,6 +15,13 @@
 #include <stdexcept>
 #include <netdb.h>
 #include <algorithm>
+#include <csignal>
+
+static volatile sig_atomic_t g_running = 1;
+
+static void signal_handler(int) {
+    g_running = 0;
+}
 
 
 void Server::set_nonblocking(int fd) {
@@ -72,6 +79,10 @@ Server::Server(int port, const ReplicationInfo& repl_info, std::optional<std::pa
     epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, server_fd, &ev);
 
     std::cout << "RedisLite listening on port " << port << "\n";
+
+    // Register signal handlers for graceful shutdown
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
 
     // -- Handshake with master (if replica) --
     if (replicaof_) {
@@ -290,7 +301,13 @@ void Server::connect_to_master(int listen_port) {
                 accumulated.append(buf, n);
                 continue;
             }
-            int rdb_len = std::stoi(accumulated.substr(dollar + 1, rdb_header_end - dollar - 1));
+            int rdb_len;
+            try {
+                rdb_len = std::stoi(accumulated.substr(dollar + 1, rdb_header_end - dollar - 1));
+            } catch (const std::exception&) {
+                close(fd);
+                throw std::runtime_error("Malformed RDB length from master");
+            }
             size_t rdb_start = rdb_header_end + 2;
             while (accumulated.size() < rdb_start + rdb_len) {
                 ssize_t n = recv(fd, buf, sizeof(buf), 0);
@@ -356,7 +373,11 @@ void Server::handle_master_read(Client* client, const std::vector<std::string>& 
 void Server::handle_replica_read(Client* client, const std::vector<std::string>& args) {
     if (args.size() >= 3 && command::to_upper(args[0]) == "REPLCONF"
         && command::to_upper(args[1]) == "ACK") {
-        client->ack_offset = std::stoll(args[2]);
+        try {
+            client->ack_offset = std::stoll(args[2]);
+        } catch (const std::exception&) {
+            return;  // Malformed ACK — ignore, don't crash
+        }
         resolve_pending_waits();
     }
 }
@@ -405,12 +426,21 @@ void Server::disconnect_all_replicas() {
 
 // Dispatch REPLICAOF — route NO ONE vs host/port
 void Server::handle_replicaof(Client* client, const std::vector<std::string>& args) {
+    if (args.size() < 3) return;  // Defense-in-depth (command layer already validates)
     std::string arg1 = command::to_upper(args[1]);
     std::string arg2 = command::to_upper(args[2]);
     if (arg1 == "NO" && arg2 == "ONE") {
         handle_replicaof_no_one(client);
     } else {
-        handle_replicaof_set_master(client, args[1], std::stoi(args[2]));
+        int port;
+        try {
+            port = std::stoi(args[2]);
+        } catch (const std::exception&) {
+            client->write_buf += "-ERR Invalid master port\r\n";
+            try_send(client);
+            return;
+        }
+        handle_replicaof_set_master(client, args[1], port);
     }
 }
 
@@ -529,8 +559,17 @@ int Server::count_caught_up_replicas(int64_t target_offset) {
 
 // WAIT command handler — resolves immediately or parks the client
 void Server::handle_wait(Client* client, const std::vector<std::string>& args) {
-    int num_needed = std::stoi(args[1]);
-    long long timeout_ms = std::stoll(args[2]);
+    if (args.size() < 3) return;  // Defense-in-depth (command layer already validates)
+    int num_needed;
+    long long timeout_ms;
+    try {
+        num_needed = std::stoi(args[1]);
+        timeout_ms = std::stoll(args[2]);
+    } catch (const std::exception&) {
+        client->write_buf += "-ERR value is not an integer or out of range\r\n";
+        try_send(client);
+        return;
+    }
 
     // no replicas connected → return 0
     // no commands propagated → all replicas are "caught up"
@@ -599,8 +638,14 @@ void Server::check_wait_timeouts() {
 
 void Server::run() {
     epoll_event events[MAX_EVENTS];
-    while (true) {
+    while (g_running) {
         int num_events = epoll_wait(epoll_fd_, events, MAX_EVENTS, 100);
+
+        if (num_events < 0) {
+            if (errno == EINTR) continue;  // Signal interrupted — just retry
+            std::cerr << "epoll_wait error: " << strerror(errno) << "\n";
+            break;
+        }
 
         for (int i = 0; i < num_events; i++) {
             Client* client = static_cast<Client*>(events[i].data.ptr);
@@ -618,5 +663,7 @@ void Server::run() {
         check_wait_timeouts();  // Expire past-deadline WAITs each iteration
         store_.evict_expired();
     }
+
+    std::cout << "Shutting down...\n";
 }
 

@@ -514,3 +514,75 @@ TEST(Command, PsyncReturnsEmptyRegardlessOfReplid) {
     auto result = command::execute({"PSYNC", "?", "-1"}, store, repl);
     EXPECT_EQ(result, "");
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// DEL command — currently unimplemented (is_write_command says yes)
+// ═══════════════════════════════════════════════════════════════════
+
+TEST(Command, DelRemovesKeyAndReturnsOne) {
+    Store store;
+    command::execute({"SET", "delme", "value"}, store, DEFAULT_REPL);
+    auto result = command::execute({"DEL", "delme"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, ":1\r\n");
+    // Key should be gone
+    EXPECT_EQ(command::execute({"GET", "delme"}, store, DEFAULT_REPL), "$-1\r\n");
+}
+
+TEST(Command, DelMissingKeyReturnsZero) {
+    Store store;
+    auto result = command::execute({"DEL", "nonexistent"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, ":0\r\n");
+}
+
+TEST(Command, DelMissingArgsReturnsError) {
+    Store store;
+    auto result = command::execute({"DEL"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "-ERR wrong number of arguments for 'del' command\r\n");
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SET PX/EX edge cases — zero and negative values
+// ═══════════════════════════════════════════════════════════════════
+
+TEST(Command, SetWithPxZeroReturnsError) {
+    Store store;
+    auto result = command::execute({"SET", "k", "v", "PX", "0"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "-ERR invalid expire time in 'set' command\r\n");
+}
+
+TEST(Command, SetWithPxNegativeReturnsError) {
+    Store store;
+    auto result = command::execute({"SET", "k", "v", "PX", "-100"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "-ERR invalid expire time in 'set' command\r\n");
+}
+
+TEST(Command, SetWithExZeroReturnsError) {
+    Store store;
+    auto result = command::execute({"SET", "k", "v", "EX", "0"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "-ERR invalid expire time in 'set' command\r\n");
+}
+
+TEST(Command, SetWithExNegativeReturnsError) {
+    Store store;
+    auto result = command::execute({"SET", "k", "v", "EX", "-5"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "-ERR invalid expire time in 'set' command\r\n");
+}
+
+TEST(Command, SetWithPxMissingValueIgnored) {
+    // SET key val PX (no value after PX) — loop condition prevents access
+    // Key should be set without TTL
+    Store store;
+    auto result = command::execute({"SET", "k", "v", "PX"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "+OK\r\n");
+    EXPECT_EQ(command::execute({"GET", "k"}, store, DEFAULT_REPL), "$1\r\nv\r\n");
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// REPLICAOF negative port — should be rejected
+// ═══════════════════════════════════════════════════════════════════
+
+TEST(Command, ReplicaofNegativePortReturnsError) {
+    Store store;
+    auto result = command::execute({"REPLICAOF", "localhost", "-1"}, store, DEFAULT_REPL);
+    EXPECT_EQ(result, "-ERR Invalid master port\r\n");
+}
