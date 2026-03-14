@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <atomic>
 
 enum class ClientType { LISTENER, REGULAR, REPLICA, MASTER_CONN };
 
