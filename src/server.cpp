@@ -160,6 +160,7 @@ void Server::handle_read(Client* client) {
                     std::string propagated = resp::encode_array(result.args);
                     int64_t pre_offset = master_repl_offset_;
                     master_repl_offset_ += static_cast<int64_t>(propagated.size());
+                    repl_info_.master_repl_offset = master_repl_offset_;
                     backlog_.feed(propagated, pre_offset);
                     for (auto* replica : replicas_) {
                         replica->write_buf += propagated;
@@ -466,7 +467,7 @@ void Server::handle_replicaof_no_one(Client* client) {
 
     // Flip role to master, preserving offset continuity for partial resync
     repl_info_.role = "master";
-    repl_info_.master_repl_offset = 0;
+    repl_info_.master_repl_offset = repl_info_.second_repl_offset;
     repl_info_.master_host = "";
     repl_info_.master_port = 0;
     replicaof_ = std::nullopt;
