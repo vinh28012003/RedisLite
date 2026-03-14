@@ -1,7 +1,8 @@
 #include <gtest/gtest.h>                                                                                
 #include "command.hpp"                                                                                  
 #include <thread>                                                                                       
-#include <chrono>                                                                                       
+#include <chrono>
+#include <algorithm>
 #include "replication_info.hpp"
 #include "resp_parser.hpp"
 
@@ -147,8 +148,12 @@ TEST(Command, EvictExpiredRemovesKeys) {
     store.set("a", "1", 50);
     store.set("b", "2", 50);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    store.evict_expired();
+    auto expired = store.evict_expired();
     EXPECT_EQ(store.size(), 0);  // no get() called — proves active path
+    EXPECT_EQ(expired.size(), 2);
+    // Both keys returned (order not guaranteed — unordered_map)
+    EXPECT_TRUE(std::find(expired.begin(), expired.end(), "a") != expired.end());
+    EXPECT_TRUE(std::find(expired.begin(), expired.end(), "b") != expired.end());
 }
 
 TEST(Command, EvictExpiredKeepsLiveKeys) {
@@ -156,8 +161,27 @@ TEST(Command, EvictExpiredKeepsLiveKeys) {
     store.set("alive", "yes");
     store.set("dead", "no", 50);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    store.evict_expired();
+    auto expired = store.evict_expired();
     EXPECT_EQ(store.size(), 1);  // only "alive" remains
+    ASSERT_EQ(expired.size(), 1);
+    EXPECT_EQ(expired[0], "dead");
+}
+
+TEST(Command, GetExpiredKeyKeepsEntry) {
+    Store store;
+    store.set("k", "v", 50);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_FALSE(store.get("k").has_value());  // read filter returns nullopt
+    EXPECT_EQ(store.size(), 1);                // but key still in map — not erased by get()
+}
+
+TEST(Command, EvictExpiredReturnsEmptyWhenNoneExpired) {
+    Store store;
+    store.set("a", "1");
+    store.set("b", "2");
+    auto expired = store.evict_expired();
+    EXPECT_TRUE(expired.empty());
+    EXPECT_EQ(store.size(), 2);  // nothing removed
 }
 
 // --- INFO ---
