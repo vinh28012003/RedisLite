@@ -22,6 +22,9 @@ public:
     std::optional<std::string> get(const std::string &key);
     void evict_expired();
     size_t size() const;
+    const std::unordered_map<std::string, Entry>& data() const;  // read-only for RDB serialization
+    bool del(const std::string& key);                               // returns true if key existed
+    void clear();                                                  // wipe before RDB load
 };
 
 

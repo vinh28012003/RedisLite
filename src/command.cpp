@@ -67,7 +67,6 @@ std::string execute(const std::vector<std::string>& args, Store &store, const Re
                 } catch (const std::out_of_range&) {
                     return "-ERR value is not an integer or out of range\r\n";
                 }
-                px_millis = std::stoll(args[i + 1]);
                 i++;    // skip the value
             } else if (opt == "EX") {
                 try{
@@ -80,9 +79,21 @@ std::string execute(const std::vector<std::string>& args, Store &store, const Re
                 i++;
             }
         }
-
+        
+        if (px_millis && *px_millis <= 0) {
+            return  "-ERR invalid expire time in 'set' command\r\n";
+        }
         store.set(args[1], args[2], px_millis);
         return "+OK\r\n";
+    }
+
+    if (cmd == "DEL") {
+        if (args.size() < 2) return "-ERR wrong number of arguments for 'del' command\r\n";
+        int count = 0;
+        for (size_t i = 1; i < args.size(); i++) {
+            if (store.del(args[i])) count++;
+        }
+        return ":" + std::to_string(count) + "\r\n";
     }
 
     if (cmd == "GET") {
