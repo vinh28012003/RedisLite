@@ -7,6 +7,7 @@ set(LIB_SOURCES
     ${CMAKE_SOURCE_DIR}/src/store.cpp
     ${CMAKE_SOURCE_DIR}/src/server.cpp
     ${CMAKE_SOURCE_DIR}/src/config.cpp
+    ${CMAKE_SOURCE_DIR}/src/rdb.cpp
 )
 
 # Unit tests
