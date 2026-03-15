@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  build-and-test-cpp:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,8 +23,29 @@ jobs:
       - name: Run integration tests
         run: |
           docker compose -f docker/docker-compose.yml up -d
-          sleep 2 # Wait for server to start
+          sleep 2
           pip install -r tests/requirements.txt
           pytest tests/integration/ -v
           docker compose -f docker/docker-compose.yml down
-      
+
+  build-and-test-go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: false
+
+      - name: Build Go controller
+        working-directory: controller
+        run: |
+          go env
+          ls -la
+          go build ./...
+
+      - name: Run Go tests
+        working-directory: controller
+        run: go test ./... -v -timeout 30s
