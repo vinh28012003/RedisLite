@@ -37,9 +37,15 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+          cache: false
 
       - name: Build Go controller
-        run: cd controller && go build ./...
+        working-directory: controller
+        run: |
+          go env
+          ls -la
+          go build ./...
 
       - name: Run Go tests
-        run: cd controller && go test ./... -v -timeout 30s
+        working-directory: controller
+        run: go test ./... -v -timeout 30s
