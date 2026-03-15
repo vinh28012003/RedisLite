@@ -1,0 +1,87 @@
+services:
+  redis-1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ./build/redis-lite --port 6379
+    ports:
+      - "6379:6379"
+    networks:
+      - redis-net
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo -e \"*1\\r\\n\\$4\\r\\nPING\\r\\n\" > /dev/tcp/localhost/6379'"]
+      interval: 1s
+      timeout: 2s
+      retries: 5
+      start_period: 3s
+
+  redis-2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ./build/redis-lite --port 6379 --replicaof redis-1 6379
+    ports:
+      - "6380:6379"
+    networks:
+      - redis-net
+    depends_on:
+      redis-1:
+        condition: service_healthy
+
+  redis-3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ./build/redis-lite --port 6379 --replicaof redis-1 6379
+    ports:
+      - "6381:6379"
+    networks:
+      - redis-net
+    depends_on:
+      redis-1:
+        condition: service_healthy
+
+  redis-4:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ./build/redis-lite --port 6379 --replicaof redis-1 6379
+    ports:
+      - "6382:6379"
+    networks:
+      - redis-net
+    depends_on:
+      redis-1:
+        condition: service_healthy
+
+  redis-5:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ./build/redis-lite --port 6379 --replicaof redis-1 6379
+    ports:
+      - "6383:6379"
+    networks:
+      - redis-net
+    depends_on:
+      redis-1:
+        condition: service_healthy
+
+  failover-ctl:
+    build:
+      context: ..
+      dockerfile: controller/Dockerfile
+    environment:
+      - REDIS_NODES=redis-1:6379,redis-2:6379,redis-3:6379,redis-4:6379,redis-5:6379
+    networks:
+      - redis-net
+    depends_on:
+      - redis-1
+      - redis-2
+      - redis-3
+      - redis-4
+      - redis-5
+
+networks:
+  redis-net:
+    driver: bridge
