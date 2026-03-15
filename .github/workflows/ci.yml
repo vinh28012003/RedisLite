@@ -39,11 +39,55 @@ jobs:
 
       - name: Build Go controller
         working-directory: controller
-        run: |
-          go env
-          ls -la
-          go build ./...
+        run: go build ./...
 
       - name: Run Go tests
         working-directory: controller
         run: go test ./... -v -timeout 30s
+
+  failover-smoke:
+    runs-on: ubuntu-latest
+    needs: [build-and-test-cpp, build-and-test-go]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build failover compose
+        run: docker compose -f docker/docker-compose.failover.yml build
+
+      - name: Start failover topology
+        run: |
+          docker compose -f docker/docker-compose.failover.yml up -d
+          sleep 10
+
+      - name: Verify all nodes respond to PING
+        run: |
+          for port in 6379 6380 6381 6382 6383; do
+            echo "Checking port $port..."
+            timeout 5 bash -c "echo -e '*1\r\n\$4\r\nPING\r\n' | nc -w2 127.0.0.1 $port | grep -q PONG"
+            echo "Port $port: OK"
+          done
+
+      - name: Verify replication topology
+        run: |
+          echo -e '*2\r\n$4\r\nINFO\r\n$11\r\nreplication\r\n' | nc -w2 127.0.0.1 6379 | grep -q "role:master"
+          echo "redis-1: master OK"
+          for port in 6380 6381 6382 6383; do
+            echo -e '*2\r\n$4\r\nINFO\r\n$11\r\nreplication\r\n' | nc -w2 127.0.0.1 $port | grep -q "role:worker"
+            echo "Port $port: replica OK"
+          done
+
+      - name: Verify controller is running
+        run: |
+          docker compose -f docker/docker-compose.failover.yml logs failover-ctl | grep -q "Starting monitor"
+          echo "Controller: running OK"
+
+      - name: Run failover tests
+        if: hashFiles('tests/failover/conftest.py') != ''
+        run: |
+          pip install pytest
+          pip install -r tests/failover/requirements.txt 2>/dev/null || true
+          pytest tests/failover/ -v --timeout=60
+
+      - name: Teardown
+        if: always()
+        run: docker compose -f docker/docker-compose.failover.yml down -v
