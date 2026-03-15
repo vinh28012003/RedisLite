@@ -2,6 +2,7 @@ package failover
 
 import (
 	"testing"
+	"time"
 )
 
 // --- encodeRESP ---
@@ -60,13 +61,39 @@ func TestEncodeRESP_ReplicaOf(t *testing.T) {
 	}
 }
 
-// --- Ping (unit-testable part: response parsing) ---
+// --- Ping ---
 
 func TestPing_UnreachableReturnsFalse(t *testing.T) {
-	// Connect to a port nothing listens on — should return false, not panic
-	result := Ping("127.0.0.1:1", 100*1000000) // 100ms timeout as Duration
+	result := Ping("127.0.0.1:1", 100*time.Millisecond)
 	if result {
 		t.Error("Ping to unreachable addr should return false")
+	}
+}
+
+// --- Role ---
+
+func TestRole_UnreachableReturnsError(t *testing.T) {
+	_, err := Role("127.0.0.1:1", 100*time.Millisecond)
+	if err == nil {
+		t.Error("Role to unreachable addr should return error")
+	}
+}
+
+// --- Info ---
+
+func TestInfo_UnreachableReturnsError(t *testing.T) {
+	_, err := Info("127.0.0.1:1", 100*time.Millisecond)
+	if err == nil {
+		t.Error("Info to unreachable addr should return error")
+	}
+}
+
+// --- ReplicaOf ---
+
+func TestReplicaOf_UnreachableReturnsError(t *testing.T) {
+	err := ReplicaOf("127.0.0.1:1", 100*time.Millisecond, "NO", "ONE")
+	if err == nil {
+		t.Error("ReplicaOf to unreachable addr should return error")
 	}
 }
 
