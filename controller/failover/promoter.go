@@ -3,6 +3,7 @@ package failover
 import (
 	"fmt"
 	"log"
+	"net"
 	"sort"
 	"strconv"
 	"time"
@@ -126,4 +127,31 @@ func Promote(ranked []string, timeout time.Duration,
 	}
 
 	return "", fmt.Errorf("all %d candidates failed promotion", len(ranked))
+}
+
+// Reconfigure sends REPLICAOF <host> <port> to each sibling so they follow
+// the new master. Best-effort: failures are logged but don't abort.
+// Returns a slice of errors (nil entry = success for that index).
+func Reconfigure(siblings []string, newMasterAddr string, timeout time.Duration,
+	replicaOfFunc ReplicaOfFunc) []error {
+
+	host, port, err := net.SplitHostPort(newMasterAddr)
+	if err != nil {
+		errs := make([]error, len(siblings))
+		for i := range siblings {
+			errs[i] = fmt.Errorf("bad master addr %q: %v", newMasterAddr, err)
+		}
+		return errs
+	}
+
+	errs := make([]error, len(siblings))
+	for i, addr := range siblings {
+		if err := replicaOfFunc(addr, timeout, host, port); err != nil {
+			log.Printf(" [reconfig] %s REPLICAOF %s %s failed: %v", addr, host, port, err)
+			errs[i] = err
+		} else {
+			log.Printf(" [reconfig] %s → now replicating from %s:%s", addr, host, port)
+		}
+	}
+	return errs
 }

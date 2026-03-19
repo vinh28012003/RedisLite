@@ -157,8 +157,22 @@ func (m *Monitor) healthCheck() {
 						m.master = r.addr
 						log.Printf(" [health] %s adopted as master", r.addr)
 					} else {
-						log.Printf(" [health] WARNING: %s claims master, but current master is %s", r.addr, m.master)
+						// Stale master recovered — reconfigure as replica of current master
+						log.Printf(" [health] %s claims master but %s is master, reconfiguring", r.addr, m.master)
+						errs := Reconfigure([]string{r.addr}, m.master, m.config.PingTimeout, m.replicaOfFunc)
+						if errs[0] == nil {
+							node.Role = "slave"
+						}
 					}
+				}
+			}
+
+			// Alive-path: stale master that failed prior reconfigure — retry each tick
+			if node.Role == "master" && r.addr != m.master && m.master != "" {
+				log.Printf(" [health] %s still stale master, retrying reconfigure", r.addr)
+				errs := Reconfigure([]string{r.addr}, m.master, m.config.PingTimeout, m.replicaOfFunc)
+				if errs[0] == nil {
+					node.Role = "slave"
 				}
 			}
 			continue
@@ -224,5 +238,14 @@ func (m *Monitor) triggerFailover() {
 	m.nodes[newMaster].Role = "master"
 	log.Printf("FAILOVER COMPLETE: %s → %s", oldMaster, newMaster)
 
-	// Stage 6: reconfigure siblings (TODO)
+	// Stage 6: reconfigure surviving siblings to follow new master
+	var siblings []string
+	for addr, node := range m.nodes {
+		if addr != newMaster && addr != oldMaster && node.Alive {
+			siblings = append(siblings, addr)
+		}
+	}
+	if len(siblings) > 0 {
+		Reconfigure(siblings, newMaster, m.config.PingTimeout, m.replicaOfFunc)
+	}
 }

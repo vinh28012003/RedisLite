@@ -303,3 +303,94 @@ func TestPromote_RoleQueryErrors_StillRetries(t *testing.T) {
 		t.Errorf("ROLE called %d times, want 3", callCount)
 	}
 }
+
+// --- Reconfigure Tests ---
+
+func TestReconfigure_HappyPath(t *testing.T) {
+	// 3 siblings all reachable → all reconfigured, no errors
+	called := map[string][2]string{}
+	replicaOf := func(addr string, timeout time.Duration, arg1, arg2 string) error {
+		called[addr] = [2]string{arg1, arg2}
+		return nil
+	}
+
+	siblings := []string{"redis-3:6379", "redis-4:6379", "redis-5:6379"}
+	errs := Reconfigure(siblings, "redis-2:6379", 500*time.Millisecond, replicaOf)
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("errs[%d] = %v, want nil", i, err)
+		}
+	}
+	// Verify correct host/port sent
+	for _, addr := range siblings {
+		args, ok := called[addr]
+		if !ok {
+			t.Errorf("%s was not called", addr)
+			continue
+		}
+		if args[0] != "redis-2" || args[1] != "6379" {
+			t.Errorf("%s got REPLICAOF %s %s, want redis-2 6379", addr, args[0], args[1])
+		}
+	}
+}
+
+func TestReconfigure_OneSiblingUnreachable(t *testing.T) {
+	// 3 siblings, one fails — best-effort: others still reconfigured
+	replicaOf := func(addr string, timeout time.Duration, arg1, arg2 string) error {
+		if addr == "redis-4:6379" {
+			return fmt.Errorf("connection refused")
+		}
+		return nil
+	}
+
+	siblings := []string{"redis-3:6379", "redis-4:6379", "redis-5:6379"}
+	errs := Reconfigure(siblings, "redis-2:6379", 500*time.Millisecond, replicaOf)
+
+	if errs[0] != nil {
+		t.Errorf("errs[0] = %v, want nil (redis-3 should succeed)", errs[0])
+	}
+	if errs[1] == nil {
+		t.Error("errs[1] = nil, want error (redis-4 unreachable)")
+	}
+	if errs[2] != nil {
+		t.Errorf("errs[2] = %v, want nil (redis-5 should succeed)", errs[2])
+	}
+}
+
+func TestReconfigure_AllSiblingsUnreachable(t *testing.T) {
+	// All siblings fail — errors returned for all, no panic
+	replicaOf := func(addr string, timeout time.Duration, arg1, arg2 string) error {
+		return fmt.Errorf("connection refused")
+	}
+
+	siblings := []string{"redis-3:6379", "redis-4:6379"}
+	errs := Reconfigure(siblings, "redis-2:6379", 500*time.Millisecond, replicaOf)
+
+	for i, err := range errs {
+		if err == nil {
+			t.Errorf("errs[%d] = nil, want error", i)
+		}
+	}
+}
+
+func TestReconfigure_EmptySiblings(t *testing.T) {
+	// No siblings to reconfigure — returns empty slice
+	errs := Reconfigure([]string{}, "redis-2:6379", 500*time.Millisecond, nil)
+
+	if len(errs) != 0 {
+		t.Errorf("len(errs) = %d, want 0", len(errs))
+	}
+}
+
+func TestReconfigure_BadMasterAddr(t *testing.T) {
+	// Malformed master address — all siblings get error
+	siblings := []string{"redis-3:6379", "redis-4:6379"}
+	errs := Reconfigure(siblings, "no-port-here", 500*time.Millisecond, nil)
+
+	for i, err := range errs {
+		if err == nil {
+			t.Errorf("errs[%d] = nil, want error (bad master addr)", i)
+		}
+	}
+}
