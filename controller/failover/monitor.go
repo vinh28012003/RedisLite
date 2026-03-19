@@ -8,13 +8,16 @@ import (
 
 // Monitor tracks node health and triggers failover on master failure.
 type Monitor struct {
-	config        Config
-	nodes         map[string]*Node // addr → node state
-	fails         map[string]int   // addr → consecutive failure count
-	master        string           // current master addr
-	failoverCount int              // how many times triggerFailover was called
-	roleFunc      func(addr string, timeout time.Duration) (RoleResult, error)
-	pingFunc      func(addr string, timeout time.Duration) bool
+	config             Config
+	nodes              map[string]*Node // addr → node state
+	fails              map[string]int   // addr → consecutive failure count
+	master             string           // current master addr
+	failoverCount      int              // how many times triggerFailover was called
+	failoverInProgress bool             // guard: prevents duplicate promotions
+	roleFunc           func(addr string, timeout time.Duration) (RoleResult, error)
+	pingFunc           func(addr string, timeout time.Duration) bool
+	infoFunc           InfoFunc         // for PickBestReplica
+	replicaOfFunc      ReplicaOfFunc    // for Promote + Reconfigure
 }
 
 // NewMonitor creates a monitor for the given config.
@@ -29,6 +32,8 @@ func NewMonitor(cfg Config) *Monitor {
 	}
 	m.roleFunc = Role
 	m.pingFunc = Ping
+	m.infoFunc = Info
+	m.replicaOfFunc = ReplicaOf
 	return m
 }
 
@@ -175,11 +180,49 @@ func (m *Monitor) healthCheck() {
 	}
 }
 
-// triggerFailover handles master death. Stages 4-6 fill in the real logic.
+// triggerFailover handles master death: select best replica, promote it, update state.
 func (m *Monitor) triggerFailover() {
+	if m.failoverInProgress {
+		log.Println(" [failover] already in progress, skipping")
+		return
+	}
+	m.failoverInProgress = true
+	defer func() { m.failoverInProgress = false }()
+
 	m.failoverCount++
-	log.Printf("FAILOVER: master %s is dead, triggering promotion...", m.master)
-	// Stage 4: pick best replica (PickBestReplica)
-	// Stage 5: promote it (Promote)
-	// Stage 6: reconfigure siblings (Reconfigure)
+	log.Printf("FAILOVER #%d: master %s is dead", m.failoverCount, m.master)
+
+	// Build candidate list: alive replicas only
+	var candidates []string
+	for addr, node := range m.nodes {
+		if node.Alive && node.Role == "slave" && addr != m.master {
+			candidates = append(candidates, addr)
+		}
+	}
+	if len(candidates) == 0 {
+		log.Println(" [failover] no alive replicas available, will retry next cycle")
+		return
+	}
+
+	// Stage 4: rank by replication offset
+	ranked, err := PickBestReplica(candidates, m.config.PingTimeout, m.infoFunc)
+	if err != nil {
+		log.Printf(" [failover] replica selection failed: %v", err)
+		return
+	}
+
+	// Stage 5: promote best candidate (with fallback through ranked list)
+	newMaster, err := Promote(ranked, m.config.PingTimeout, m.replicaOfFunc, m.roleFunc)
+	if err != nil {
+		log.Printf(" [failover] promotion failed: %v", err)
+		return
+	}
+
+	// Update internal state
+	oldMaster := m.master
+	m.master = newMaster
+	m.nodes[newMaster].Role = "master"
+	log.Printf("FAILOVER COMPLETE: %s → %s", oldMaster, newMaster)
+
+	// Stage 6: reconfigure siblings (TODO)
 }

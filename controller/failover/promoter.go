@@ -11,6 +11,15 @@ import (
 // InfoFunc queries INFO replication on a node. Seam for testing.
 type InfoFunc func(addr string, timeout time.Duration) (map[string]string, error)
 
+// ReplicaOfFunc sends REPLICAOF to a node. Seam for testing.
+type ReplicaOfFunc func(addr string, timeout time.Duration, arg1, arg2 string) error
+
+// Promotion tuning constants.
+const (
+	promoteMaxRetries = 3                       // ROLE poll attempts after REPLICAOF NO ONE
+	promoteRetryDelay = 200 * time.Millisecond  // delay between ROLE polls
+)
+
 // replicaCandidate pairs an address with its replication offset for sorting.
 type replicaCandidate struct {
 	addr   string
@@ -67,4 +76,54 @@ func PickBestReplica(candidates []string, timeout time.Duration, infoFunc InfoFu
 
 	log.Printf(" [selection] ranked: %v (best: %s, offset=%d)", ranked, reachable[0].addr, reachable[0].offset)
 	return ranked, nil
+}
+
+// Promote walks the ranked candidate list and attempts promotion:
+//  1. REPLICAOF NO ONE
+//  2. Poll ROLE up to promoteMaxRetries times (promoteRetryDelay apart)
+//  3. If role == "master" → success, return addr
+//  4. Otherwise → try next candidate
+//
+// Returns the address of the newly promoted master, or error if all fail.
+func Promote(ranked []string, timeout time.Duration,
+	replicaOfFunc ReplicaOfFunc, roleFunc func(string, time.Duration) (RoleResult, error),
+) (string, error) {
+	if len(ranked) == 0 {
+		return "", fmt.Errorf("no candidates to promote")
+	}
+
+	for i, addr := range ranked {
+		log.Printf(" [promote] trying candidate %d/%d: %s", i+1, len(ranked), addr)
+
+		// Step 1: tell the replica to stop replicating
+		if err := replicaOfFunc(addr, timeout, "NO", "ONE"); err != nil {
+			log.Printf(" [promote] %s REPLICAOF NO ONE failed: %v", addr, err)
+			continue
+		}
+
+		// Step 2: poll ROLE to verify it became master
+		promoted := false
+		for attempt := 1; attempt <= promoteMaxRetries; attempt++ {
+			time.Sleep(promoteRetryDelay)
+
+			roleResult, err := roleFunc(addr, timeout)
+			if err != nil {
+				log.Printf(" [promote] %s ROLE check %d/%d failed: %v", addr, attempt, promoteMaxRetries, err)
+				continue
+			}
+			if roleResult.Role == "master" {
+				log.Printf(" [promote] %s confirmed master on attempt %d", addr, attempt)
+				promoted = true
+				break
+			}
+			log.Printf(" [promote] %s still role=%s (attempt %d/%d)", addr, roleResult.Role, attempt, promoteMaxRetries)
+		}
+
+		if promoted {
+			return addr, nil
+		}
+		log.Printf(" [promote] %s failed verification, trying next candidate", addr)
+	}
+
+	return "", fmt.Errorf("all %d candidates failed promotion", len(ranked))
 }
