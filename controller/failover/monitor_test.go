@@ -644,6 +644,281 @@ func TestTriggerFailover_GuardClearsAfterCompletion(t *testing.T) {
 	}
 }
 
+func TestTriggerFailover_ReconfiguresSiblings(t *testing.T) {
+	// After promotion, surviving siblings should receive REPLICAOF <new-master>
+	addrs := []string{"redis-1:6379", "redis-2:6379", "redis-3:6379", "redis-4:6379"}
+	infos := map[string]map[string]string{
+		"redis-2:6379": {"master_repl_offset": "300"}, // best → promoted
+		"redis-3:6379": {"master_repl_offset": "200"},
+		"redis-4:6379": {"master_repl_offset": "100"},
+	}
+	// Track REPLICAOF calls
+	replicaOfCalls := map[string][2]string{}
+	replicaOf := func(addr string, timeout time.Duration, arg1, arg2 string) error {
+		replicaOfCalls[addr] = [2]string{arg1, arg2}
+		return nil
+	}
+	roles := map[string][]RoleResult{
+		"redis-2:6379": {{Role: "master", Offset: 300}},
+	}
+
+	m := newFailoverTestMonitor(addrs, "redis-1:6379", infos, map[string]bool{}, roles)
+	m.replicaOfFunc = replicaOf
+	m.triggerFailover()
+
+	// redis-2 promoted as new master
+	if m.master != "redis-2:6379" {
+		t.Fatalf("master = %q, want redis-2:6379", m.master)
+	}
+
+	// redis-2 gets REPLICAOF NO ONE (from Promote)
+	if args, ok := replicaOfCalls["redis-2:6379"]; ok {
+		if args[0] != "NO" || args[1] != "ONE" {
+			t.Errorf("redis-2 got REPLICAOF %s %s, want NO ONE", args[0], args[1])
+		}
+	} else {
+		t.Error("redis-2 should have received REPLICAOF NO ONE")
+	}
+
+	// redis-3 and redis-4 should be reconfigured to follow redis-2
+	for _, addr := range []string{"redis-3:6379", "redis-4:6379"} {
+		args, ok := replicaOfCalls[addr]
+		if !ok {
+			t.Errorf("%s should have received REPLICAOF", addr)
+			continue
+		}
+		if args[0] != "redis-2" || args[1] != "6379" {
+			t.Errorf("%s got REPLICAOF %s %s, want redis-2 6379", addr, args[0], args[1])
+		}
+	}
+
+	// redis-1 (dead old master) should NOT have been called
+	if _, ok := replicaOfCalls["redis-1:6379"]; ok {
+		t.Error("redis-1 (dead old master) should not have been reconfigured")
+	}
+}
+
+func TestHealthCheck_OldMasterRecovery_ReconfiguredAsReplica(t *testing.T) {
+	// Old master comes back claiming "master" — should be reconfigured as replica
+	addrs := []string{"redis-1:6379", "redis-2:6379", "redis-3:6379"}
+
+	// Simulate: redis-2 is current master, redis-1 was old master and is dead
+	m := NewMonitor(DefaultConfig(addrs))
+	m.master = "redis-2:6379"
+	m.nodes["redis-1:6379"].Alive = false
+	m.nodes["redis-1:6379"].Role = "master" // stale role
+	m.nodes["redis-2:6379"].Alive = true
+	m.nodes["redis-2:6379"].Role = "master"
+	m.nodes["redis-3:6379"].Alive = true
+	m.nodes["redis-3:6379"].Role = "slave"
+	m.fails["redis-1:6379"] = 5 // well past threshold
+
+	// redis-1 recovers, ROLE still says "master" (hasn't been reconfigured yet)
+	pings := map[string]bool{
+		"redis-1:6379": true, // recovered!
+		"redis-2:6379": true,
+		"redis-3:6379": true,
+	}
+	roles := map[string]RoleResult{
+		"redis-1:6379": {Role: "master", Offset: 100}, // stale master claim
+	}
+	m.pingFunc = mockPingFunc(pings)
+	m.roleFunc = mockRoleFunc(roles)
+
+	// Track REPLICAOF calls
+	replicaOfCalls := map[string][2]string{}
+	m.replicaOfFunc = func(addr string, timeout time.Duration, arg1, arg2 string) error {
+		replicaOfCalls[addr] = [2]string{arg1, arg2}
+		return nil
+	}
+
+	m.healthCheck()
+
+	// redis-1 should be reconfigured as slave of redis-2
+	if m.nodes["redis-1:6379"].Role != "slave" {
+		t.Errorf("redis-1 role = %q, want slave (reconfigured)", m.nodes["redis-1:6379"].Role)
+	}
+	args, ok := replicaOfCalls["redis-1:6379"]
+	if !ok {
+		t.Fatal("redis-1 should have received REPLICAOF")
+	}
+	if args[0] != "redis-2" || args[1] != "6379" {
+		t.Errorf("redis-1 got REPLICAOF %s %s, want redis-2 6379", args[0], args[1])
+	}
+	// master should stay as redis-2
+	if m.master != "redis-2:6379" {
+		t.Errorf("master = %q, want redis-2:6379 (should not change)", m.master)
+	}
+}
+
+func TestHealthCheck_OldMasterRecovery_ReconfigureFails_RoleUnchanged(t *testing.T) {
+	// Old master recovers claiming "master", but Reconfigure fails.
+	// Role should stay "master" (not incorrectly set to "slave").
+	// Next tick, alive-path check retries reconfigure.
+	addrs := []string{"redis-1:6379", "redis-2:6379"}
+
+	m := NewMonitor(DefaultConfig(addrs))
+	m.master = "redis-2:6379"
+	m.nodes["redis-1:6379"].Alive = false
+	m.nodes["redis-1:6379"].Role = "master"
+	m.nodes["redis-2:6379"].Alive = true
+	m.nodes["redis-2:6379"].Role = "master"
+	m.fails["redis-1:6379"] = 5
+
+	// redis-1 recovers, ROLE still says "master"
+	m.pingFunc = mockPingFunc(map[string]bool{
+		"redis-1:6379": true,
+		"redis-2:6379": true,
+	})
+	m.roleFunc = mockRoleFunc(map[string]RoleResult{
+		"redis-1:6379": {Role: "master", Offset: 100},
+	})
+
+	// Reconfigure FAILS
+	m.replicaOfFunc = func(addr string, timeout time.Duration, arg1, arg2 string) error {
+		return fmt.Errorf("connection refused")
+	}
+
+	m.healthCheck()
+
+	// Role should stay "master" — reconfigure failed, don't lie about state
+	if m.nodes["redis-1:6379"].Role != "master" {
+		t.Errorf("redis-1 role = %q, want master (reconfigure failed, should not update)", m.nodes["redis-1:6379"].Role)
+	}
+
+	// Now fix the network — next tick's alive-path check should retry and succeed
+	replicaOfCalls := map[string][2]string{}
+	m.replicaOfFunc = func(addr string, timeout time.Duration, arg1, arg2 string) error {
+		replicaOfCalls[addr] = [2]string{arg1, arg2}
+		return nil
+	}
+
+	m.healthCheck()
+
+	// Now role should be "slave" — alive-path retry succeeded
+	if m.nodes["redis-1:6379"].Role != "slave" {
+		t.Errorf("redis-1 role = %q, want slave (alive-path retry should succeed)", m.nodes["redis-1:6379"].Role)
+	}
+	args, ok := replicaOfCalls["redis-1:6379"]
+	if !ok {
+		t.Fatal("redis-1 should have received REPLICAOF on retry")
+	}
+	if args[0] != "redis-2" || args[1] != "6379" {
+		t.Errorf("redis-1 got REPLICAOF %s %s, want redis-2 6379", args[0], args[1])
+	}
+}
+
+func TestTriggerFailover_OnlyPromotedNodeAlive(t *testing.T) {
+	// All other replicas are dead — only promoted node is alive.
+	// Sibling list should be empty, no reconfigure calls, no crash.
+	addrs := []string{"redis-1:6379", "redis-2:6379", "redis-3:6379"}
+	infos := map[string]map[string]string{
+		"redis-2:6379": {"master_repl_offset": "200"},
+	}
+	roles := map[string][]RoleResult{
+		"redis-2:6379": {{Role: "master", Offset: 200}},
+	}
+
+	m := NewMonitor(DefaultConfig(addrs))
+	m.master = "redis-1:6379"
+	// redis-1 (master) dead, redis-2 alive, redis-3 also dead
+	m.nodes["redis-1:6379"].Alive = false
+	m.nodes["redis-1:6379"].Role = "master"
+	m.fails["redis-1:6379"] = 3
+	m.nodes["redis-2:6379"].Alive = true
+	m.nodes["redis-2:6379"].Role = "slave"
+	m.nodes["redis-3:6379"].Alive = false
+	m.nodes["redis-3:6379"].Role = "slave"
+
+	m.infoFunc = mockInfoFunc(infos)
+	m.roleFunc = mockRoleFuncSequence(roles)
+
+	// Track REPLICAOF calls
+	replicaOfCalls := map[string][2]string{}
+	m.replicaOfFunc = func(addr string, timeout time.Duration, arg1, arg2 string) error {
+		replicaOfCalls[addr] = [2]string{arg1, arg2}
+		return nil
+	}
+
+	m.triggerFailover()
+
+	if m.master != "redis-2:6379" {
+		t.Fatalf("master = %q, want redis-2:6379", m.master)
+	}
+	// Only redis-2 should have been called (REPLICAOF NO ONE from Promote)
+	if len(replicaOfCalls) != 1 {
+		t.Errorf("replicaOfCalls count = %d, want 1 (only Promote, no siblings)", len(replicaOfCalls))
+	}
+	if args, ok := replicaOfCalls["redis-2:6379"]; ok {
+		if args[0] != "NO" || args[1] != "ONE" {
+			t.Errorf("redis-2 got REPLICAOF %s %s, want NO ONE", args[0], args[1])
+		}
+	}
+	// Dead nodes should NOT have been called
+	if _, ok := replicaOfCalls["redis-1:6379"]; ok {
+		t.Error("redis-1 (dead master) should not be reconfigured")
+	}
+	if _, ok := replicaOfCalls["redis-3:6379"]; ok {
+		t.Error("redis-3 (dead replica) should not be reconfigured")
+	}
+}
+
+func TestTriggerFailover_ExcludesDeadSiblings(t *testing.T) {
+	// 4 nodes: master dead, 1 replica dead, 2 replicas alive.
+	// Only alive siblings (minus promoted) should be reconfigured.
+	addrs := []string{"redis-1:6379", "redis-2:6379", "redis-3:6379", "redis-4:6379"}
+	infos := map[string]map[string]string{
+		"redis-2:6379": {"master_repl_offset": "300"}, // best → promoted
+		"redis-4:6379": {"master_repl_offset": "100"}, // alive sibling
+	}
+	roles := map[string][]RoleResult{
+		"redis-2:6379": {{Role: "master", Offset: 300}},
+	}
+
+	m := NewMonitor(DefaultConfig(addrs))
+	m.master = "redis-1:6379"
+	m.nodes["redis-1:6379"].Alive = false
+	m.nodes["redis-1:6379"].Role = "master"
+	m.fails["redis-1:6379"] = 3
+	m.nodes["redis-2:6379"].Alive = true
+	m.nodes["redis-2:6379"].Role = "slave"
+	m.nodes["redis-3:6379"].Alive = false // dead replica
+	m.nodes["redis-3:6379"].Role = "slave"
+	m.nodes["redis-4:6379"].Alive = true // alive replica
+	m.nodes["redis-4:6379"].Role = "slave"
+
+	m.infoFunc = mockInfoFunc(infos)
+	m.roleFunc = mockRoleFuncSequence(roles)
+
+	replicaOfCalls := map[string][2]string{}
+	m.replicaOfFunc = func(addr string, timeout time.Duration, arg1, arg2 string) error {
+		replicaOfCalls[addr] = [2]string{arg1, arg2}
+		return nil
+	}
+
+	m.triggerFailover()
+
+	if m.master != "redis-2:6379" {
+		t.Fatalf("master = %q, want redis-2:6379", m.master)
+	}
+	// redis-4 (alive sibling) should be reconfigured to follow redis-2
+	if args, ok := replicaOfCalls["redis-4:6379"]; ok {
+		if args[0] != "redis-2" || args[1] != "6379" {
+			t.Errorf("redis-4 got REPLICAOF %s %s, want redis-2 6379", args[0], args[1])
+		}
+	} else {
+		t.Error("redis-4 (alive sibling) should have been reconfigured")
+	}
+	// redis-3 (dead) should NOT be called
+	if _, ok := replicaOfCalls["redis-3:6379"]; ok {
+		t.Error("redis-3 (dead replica) should not be reconfigured")
+	}
+	// redis-1 (dead master) should NOT be called
+	if _, ok := replicaOfCalls["redis-1:6379"]; ok {
+		t.Error("redis-1 (dead master) should not be reconfigured")
+	}
+}
+
 func TestHealthCheck_NoMasterDiscovered_NodeClaimsMaster(t *testing.T) {
 	// discoverTopology found no master (m.master == "")
 	// A node recovers claiming master — should be adopted as master (bug #4 fix)
