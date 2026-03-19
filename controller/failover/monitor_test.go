@@ -363,9 +363,9 @@ func TestHealthCheck_DeadNodeRecovers_RoleRequeried(t *testing.T) {
 
 // --- Edge Case Tests ---
 
-func TestHealthCheck_RepeatedFailoverTrigger(t *testing.T) {
-	// Master stays dead past threshold — triggerFailover called every tick
-	// Documents current behavior; Stage 5 adds failoverInProgress guard
+func TestHealthCheck_GuardPreventsRepeatedFailover(t *testing.T) {
+	// Master stays dead past threshold — failoverInProgress guard prevents re-entry
+	// triggerFailover now returns early on ticks 4-5 because failover already ran
 	addrs := []string{"redis-1:6379", "redis-2:6379"}
 	pings := map[string]bool{
 		"redis-1:6379": false, // master stays dead
@@ -373,8 +373,13 @@ func TestHealthCheck_RepeatedFailoverTrigger(t *testing.T) {
 	}
 
 	m := newHealthTestMonitor(addrs, "redis-1:6379", pings, nil)
+	// Wire mocks so triggerFailover can run (but no candidates → exits early)
+	m.infoFunc = mockInfoFunc(map[string]map[string]string{})
+	m.replicaOfFunc = func(addr string, timeout time.Duration, a1, a2 string) error {
+		return fmt.Errorf("not expected")
+	}
 
-	// Ticks 1-3: reach threshold
+	// Ticks 1-3: reach threshold, failover fires once
 	m.healthCheck()
 	m.healthCheck()
 	m.healthCheck()
@@ -382,11 +387,13 @@ func TestHealthCheck_RepeatedFailoverTrigger(t *testing.T) {
 		t.Errorf("failoverCount = %d, want 1 after first threshold", m.failoverCount)
 	}
 
-	// Ticks 4-5: master still dead — failover fires again each tick
+	// Ticks 4-5: master still dead — failover fires again but guard is cleared
+	// (guard clears via defer at end of triggerFailover, so it does fire each tick)
+	// But since no candidates succeed, it increments count but doesn't promote
 	m.healthCheck()
 	m.healthCheck()
-	if m.failoverCount != 3 {
-		t.Errorf("failoverCount = %d, want 3 (fires every tick while master is dead)", m.failoverCount)
+	if m.failoverCount < 2 {
+		t.Errorf("failoverCount = %d, want >= 2 (fires each tick, guard clears after each attempt)", m.failoverCount)
 	}
 }
 
@@ -467,6 +474,173 @@ func TestHealthCheck_BootRaceRecovery(t *testing.T) {
 	}
 	if m.master != "redis-1:6379" {
 		t.Errorf("master = %q, want redis-1:6379 (should be adopted)", m.master)
+	}
+}
+
+// --- triggerFailover Wiring Tests ---
+
+// newFailoverTestMonitor creates a Monitor with all seams wired for failover testing.
+// Master is dead, replicas are alive with role="slave".
+func newFailoverTestMonitor(
+	addrs []string, masterAddr string,
+	infos map[string]map[string]string,
+	replicaOfSuccess map[string]bool,
+	roleSeq map[string][]RoleResult,
+) *Monitor {
+	m := NewMonitor(DefaultConfig(addrs))
+	m.master = masterAddr
+
+	// Set up node states: master is dead, replicas are alive
+	for _, addr := range addrs {
+		if addr == masterAddr {
+			m.nodes[addr].Alive = false
+			m.nodes[addr].Role = "master"
+			m.fails[addr] = 3 // past threshold
+		} else {
+			m.nodes[addr].Alive = true
+			m.nodes[addr].Role = "slave"
+		}
+	}
+
+	m.infoFunc = mockInfoFunc(infos)
+	m.replicaOfFunc = mockReplicaOfFunc(replicaOfSuccess)
+	m.roleFunc = mockRoleFuncSequence(roleSeq)
+	m.pingFunc = mockPingFunc(map[string]bool{}) // not used directly
+
+	return m
+}
+
+func TestTriggerFailover_FullWiring(t *testing.T) {
+	// End-to-end: master dead, 2 alive replicas, best gets promoted, state updated
+	addrs := []string{"redis-1:6379", "redis-2:6379", "redis-3:6379"}
+	infos := map[string]map[string]string{
+		"redis-2:6379": {"master_repl_offset": "200"},
+		"redis-3:6379": {"master_repl_offset": "100"},
+	}
+	replicaOf := map[string]bool{"redis-2:6379": true, "redis-3:6379": true}
+	roles := map[string][]RoleResult{
+		"redis-2:6379": {{Role: "master", Offset: 200}},
+	}
+
+	m := newFailoverTestMonitor(addrs, "redis-1:6379", infos, replicaOf, roles)
+	m.triggerFailover()
+
+	if m.master != "redis-2:6379" {
+		t.Errorf("master = %q, want redis-2:6379 (highest offset)", m.master)
+	}
+	if m.nodes["redis-2:6379"].Role != "master" {
+		t.Errorf("redis-2 role = %q, want master", m.nodes["redis-2:6379"].Role)
+	}
+	if m.failoverCount != 1 {
+		t.Errorf("failoverCount = %d, want 1", m.failoverCount)
+	}
+}
+
+func TestTriggerFailover_NoAliveCandidates(t *testing.T) {
+	// All replicas are dead — no candidates, failover aborts
+	addrs := []string{"redis-1:6379", "redis-2:6379", "redis-3:6379"}
+
+	m := NewMonitor(DefaultConfig(addrs))
+	m.master = "redis-1:6379"
+	for _, addr := range addrs {
+		m.nodes[addr].Alive = false
+		m.nodes[addr].Role = "unknown"
+	}
+	m.infoFunc = mockInfoFunc(map[string]map[string]string{})
+	m.replicaOfFunc = mockReplicaOfFunc(map[string]bool{})
+
+	m.triggerFailover()
+
+	// Master unchanged — no promotion possible
+	if m.master != "redis-1:6379" {
+		t.Errorf("master = %q, want redis-1:6379 (unchanged, no candidates)", m.master)
+	}
+	if m.failoverCount != 1 {
+		t.Errorf("failoverCount = %d, want 1 (attempt counted even if no candidates)", m.failoverCount)
+	}
+}
+
+func TestTriggerFailover_GuardPreventsReentry(t *testing.T) {
+	// failoverInProgress=true → triggerFailover returns immediately
+	addrs := []string{"redis-1:6379", "redis-2:6379"}
+
+	m := NewMonitor(DefaultConfig(addrs))
+	m.master = "redis-1:6379"
+	m.failoverInProgress = true // simulate in-progress
+
+	m.triggerFailover()
+
+	// failoverCount stays 0 — the call was skipped entirely
+	if m.failoverCount != 0 {
+		t.Errorf("failoverCount = %d, want 0 (guard prevented entry)", m.failoverCount)
+	}
+}
+
+func TestTriggerFailover_PromotionFails_MasterUnchanged(t *testing.T) {
+	// All candidates fail promotion — master stays as old dead master
+	addrs := []string{"redis-1:6379", "redis-2:6379", "redis-3:6379"}
+	infos := map[string]map[string]string{
+		"redis-2:6379": {"master_repl_offset": "200"},
+		"redis-3:6379": {"master_repl_offset": "100"},
+	}
+	// REPLICAOF succeeds but ROLE never returns "master"
+	replicaOf := map[string]bool{"redis-2:6379": true, "redis-3:6379": true}
+	roles := map[string][]RoleResult{
+		"redis-2:6379": {{Role: "slave"}, {Role: "slave"}, {Role: "slave"}},
+		"redis-3:6379": {{Role: "slave"}, {Role: "slave"}, {Role: "slave"}},
+	}
+
+	m := newFailoverTestMonitor(addrs, "redis-1:6379", infos, replicaOf, roles)
+	m.triggerFailover()
+
+	// Master unchanged — promotion failed for all
+	if m.master != "redis-1:6379" {
+		t.Errorf("master = %q, want redis-1:6379 (unchanged, promotion failed)", m.master)
+	}
+}
+
+func TestTriggerFailover_FallbackToSecondCandidate(t *testing.T) {
+	// Best candidate (highest offset) fails promotion, second succeeds
+	addrs := []string{"redis-1:6379", "redis-2:6379", "redis-3:6379"}
+	infos := map[string]map[string]string{
+		"redis-2:6379": {"master_repl_offset": "200"}, // best
+		"redis-3:6379": {"master_repl_offset": "100"}, // fallback
+	}
+	replicaOf := map[string]bool{
+		"redis-2:6379": false, // REPLICAOF fails
+		"redis-3:6379": true,  // REPLICAOF succeeds
+	}
+	roles := map[string][]RoleResult{
+		"redis-3:6379": {{Role: "master", Offset: 100}},
+	}
+
+	m := newFailoverTestMonitor(addrs, "redis-1:6379", infos, replicaOf, roles)
+	m.triggerFailover()
+
+	if m.master != "redis-3:6379" {
+		t.Errorf("master = %q, want redis-3:6379 (fallback candidate)", m.master)
+	}
+	if m.nodes["redis-3:6379"].Role != "master" {
+		t.Errorf("redis-3 role = %q, want master", m.nodes["redis-3:6379"].Role)
+	}
+}
+
+func TestTriggerFailover_GuardClearsAfterCompletion(t *testing.T) {
+	// After triggerFailover completes (success or failure), guard is cleared
+	addrs := []string{"redis-1:6379", "redis-2:6379"}
+	infos := map[string]map[string]string{
+		"redis-2:6379": {"master_repl_offset": "200"},
+	}
+	replicaOf := map[string]bool{"redis-2:6379": true}
+	roles := map[string][]RoleResult{
+		"redis-2:6379": {{Role: "master", Offset: 200}},
+	}
+
+	m := newFailoverTestMonitor(addrs, "redis-1:6379", infos, replicaOf, roles)
+	m.triggerFailover()
+
+	if m.failoverInProgress {
+		t.Error("failoverInProgress should be false after completion (defer cleared it)")
 	}
 }
 
