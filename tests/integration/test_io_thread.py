@@ -355,10 +355,14 @@ class TestConcurrentReadsWrites:
         try:
             t.join(timeout=30)
             assert not errors, f"Write errors: {errors}"
-            time.sleep(2)
 
-            # Replica should have at least the later keys (propagated after connect)
-            resp = send_command(MASTER_HOST, 6383, "GET", "during_load_499")
+            # Poll for the last key instead of fixed sleep — CI runners may be slow
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                resp = send_command(MASTER_HOST, 6383, "GET", "during_load_499")
+                if "v499" in resp:
+                    break
+                time.sleep(0.5)
             assert "v499" in resp, "Last key should be on replica"
         finally:
             kill_server(6383, proc)

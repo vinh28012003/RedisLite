@@ -80,7 +80,7 @@ def test_master_handles_psync_command():
     """Master responds to PSYNC ? -1 with +FULLRESYNC <repl_id> <offset> followed by empty RDB."""
     import re
 
-    sock = socket.create_connection(("127.0.0.1", 6379), timeout=2)
+    sock = socket.create_connection(("127.0.0.1", 6379), timeout=5)
     try:
         sock.sendall(b"*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n")
         response = sock.recv(4096)
@@ -99,7 +99,15 @@ def test_master_handles_psync_command():
         rdb_header_end = rdb_part.index(b"\r\n")
         rdb_len = int(rdb_part[1:rdb_header_end])
         rdb_binary = rdb_part[rdb_header_end + 2:]
-        assert len(rdb_binary) == rdb_len, f"Expected {rdb_len} bytes, got {len(rdb_binary)}"
+
+        # RDB may be larger than one recv — read until we have all bytes
+        while len(rdb_binary) < rdb_len:
+            chunk = sock.recv(65536)
+            assert chunk, "Connection closed before full RDB received"
+            rdb_binary += chunk
+
+        assert len(rdb_binary) >= rdb_len, f"Expected {rdb_len} bytes, got {len(rdb_binary)}"
+        rdb_binary = rdb_binary[:rdb_len]  # trim any trailing propagation data
         assert rdb_binary[:5] == b"REDIS", f"RDB should start with REDIS magic"
     finally:
         sock.close()

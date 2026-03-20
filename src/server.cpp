@@ -276,6 +276,7 @@ void Server::connect_to_master(int listen_port) {
     auto psync_resp = send_and_recv(fd, resp::encode_array({"PSYNC", psync_id, psync_offset}));
 
     // 7. Handle CONTINUE (partial resync) vs FULLRESYNC
+    std::string leftover_after_rdb;  // propagation commands received during FULLRESYNC handshake
     if (psync_resp.find("+CONTINUE") != std::string::npos) {
         // Partial resync — no RDB, keep existing data
         // Any trailing data after +CONTINUE\r\n is replayed commands (handled by event loop)
@@ -330,18 +331,33 @@ void Server::connect_to_master(int listen_port) {
                 std::cerr << "RDB load failed: " << e.what() << ", continuing with empty store\n";
                 store_.clear();
             }
+
+            // Preserve bytes after RDB — these are propagation commands that
+            // arrived during the handshake (writer thread sent them while we
+            // were still reading the RDB). They must be processed by the event
+            // loop, so we save them and seed master_client_->read_buf below.
+            size_t rdb_end = rdb_start + rdb_len;
+            if (accumulated.size() > rdb_end) {
+                leftover_after_rdb = accumulated.substr(rdb_end);
+            }
+
             break;
         }
     } else {
         close(fd);
         throw std::runtime_error("Unexpected PSYNC response from master");
     }
-    
+
     master_fd_ = fd;
-    
+
     // 8. Register master_fd_ with epoll as MASTER_CONN
     set_nonblocking(fd);
     master_client_ = new Client(fd, ClientType::MASTER_CONN);
+
+    // Seed read buffer with any propagation commands received during handshake
+    if (!leftover_after_rdb.empty()) {
+        master_client_->read_buf = std::move(leftover_after_rdb);
+    }
     epoll_event mev{};
     mev.events = EPOLLIN;
     mev.data.ptr = master_client_;
