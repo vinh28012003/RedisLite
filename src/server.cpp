@@ -558,6 +558,13 @@ void Server::handle_replicaof_set_master(Client* client, const std::string& host
 }
 
 void Server::remove_client(Client* client) {
+    // Clear master pointer if this is the master connection being removed
+    // (prevents use-after-free when REPLICAOF NO ONE arrives after master disconnect)
+    if (client == master_client_) {
+        master_client_ = nullptr;
+        master_fd_ = -1;
+    }
+
     // Remove from replicas_ before close/delete to prevent dangling pointer
     replicas_.erase(std::remove(replicas_.begin(), replicas_.end(), client), replicas_.end());
 
