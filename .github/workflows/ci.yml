@@ -55,16 +55,14 @@ jobs:
         run: docker compose -f docker/docker-compose.failover.yml build
 
       - name: Start failover topology
-        run: |
-          docker compose -f docker/docker-compose.failover.yml up -d
-          sleep 10
+        run: docker compose -f docker/docker-compose.failover.yml up -d
 
-      - name: Verify all nodes respond to PING
+      - name: Wait for all nodes to respond to PING
         run: |
           for port in 6379 6380 6381 6382 6383; do
-            echo "Checking port $port..."
-            timeout 5 bash -c "echo -e '*1\r\n\$4\r\nPING\r\n' | nc -w2 127.0.0.1 $port | grep -q PONG"
-            echo "Port $port: OK"
+            echo "Waiting for port $port..."
+            timeout 30 bash -c "until echo -e '*1\r\n\$4\r\nPING\r\n' | nc -w1 127.0.0.1 $port | grep -q PONG; do sleep 1; done"
+            echo "Port $port: ready"
           done
 
       - name: Verify replication topology
@@ -82,10 +80,8 @@ jobs:
           echo "Controller: running OK"
 
       - name: Run failover tests
-        if: hashFiles('tests/failover/conftest.py') != ''
         run: |
-          pip install pytest
-          pip install -r tests/failover/requirements.txt 2>/dev/null || true
+          pip install -r tests/requirements.txt
           pytest tests/failover/ -v --timeout=60
 
       - name: Teardown
