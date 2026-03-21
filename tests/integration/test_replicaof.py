@@ -58,7 +58,7 @@ def replica_6383():
     proc = subprocess.Popen(
         ["docker", "compose", "-f", "docker/docker-compose.yml",
          "exec", "-T", "redis-lite",
-         "./build/redis-lite", "--port", str(REPLICAOF_PORT),
+         "redis-lite", "--port", str(REPLICAOF_PORT),
          "--replicaof", "localhost", "6379"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
@@ -189,7 +189,7 @@ class TestReplicaofSetMaster:
         proc = subprocess.Popen(
             ["docker", "compose", "-f", "docker/docker-compose.yml",
              "exec", "-T", "redis-lite",
-             "./build/redis-lite", "--port", str(REPLICAOF_PORT)],
+             "redis-lite", "--port", str(REPLICAOF_PORT)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
         try:

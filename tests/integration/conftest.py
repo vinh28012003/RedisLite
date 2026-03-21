@@ -58,7 +58,7 @@ def _start_replica(port):
     proc = subprocess.Popen(
         ["docker", "compose", "-f", "docker/docker-compose.yml",
         "exec", "-T", "redis-lite",
-        "./build/redis-lite", "--port", str(port),
+        "redis-lite", "--port", str(port),
         "--replicaof", "localhost", "6379"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )

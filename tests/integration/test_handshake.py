@@ -8,7 +8,7 @@ def test_replica_fails_with_unreachable_master():
     proc = subprocess.Popen(
         ["docker", "compose", "-f", "docker/docker-compose.yml",
         "exec", "-T", "redis-lite",
-        "./build/redis-lite", "--port", "6381",
+        "redis-lite", "--port", "6381",
         "--replicaof", "127.0.0.1", "9999"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
@@ -25,7 +25,7 @@ def test_replica_fails_with_invalid_host():
     proc = subprocess.Popen(
         ["docker", "compose", "-f", "docker/docker-compose.yml",
         "exec", "-T", "redis-lite",
-        "./build/redis-lite", "--port", "6382",
+        "redis-lite", "--port", "6382",
         "--replicaof", "999.999.999.999", "6379"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
@@ -64,7 +64,7 @@ def test_replica_fails_when_master_sends_wrong_response():
     proc = subprocess.Popen(
         ["docker", "compose", "-f", "docker/docker-compose.yml",
         "exec", "-T", "redis-lite",
-        "./build/redis-lite", "--port", "6383",
+        "redis-lite", "--port", "6383",
         "--replicaof", "host.docker.internal", "7777"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )

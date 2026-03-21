@@ -45,7 +45,7 @@ def encode_resp(*args):
     return cmd.encode()
 
 
-def wait_for_ready(host, port, timeout=5.0):
+def wait_for_ready(host, port, timeout=15.0):
     """Block until server responds to PING with +PONG."""
     start = time.time()
     while time.time() - start < timeout:
@@ -88,7 +88,7 @@ def start_server(port, replicaof=None):
     kill_server(port)
     cmd = ["docker", "compose", "-f", "docker/docker-compose.yml",
            "exec", "-T", "redis-lite",
-           "./build/redis-lite", "--port", str(port)]
+           "redis-lite", "--port", str(port)]
     if replicaof:
         cmd += ["--replicaof", replicaof[0], str(replicaof[1])]
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

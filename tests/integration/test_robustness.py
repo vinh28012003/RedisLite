@@ -80,7 +80,7 @@ def test_graceful_shutdown_on_sigterm():
     proc = subprocess.Popen(
         ["docker", "compose", "-f", "docker/docker-compose.yml",
          "exec", "-T", "redis-lite",
-         "./build/redis-lite", "--port", "6384"],
+         "redis-lite", "--port", "6384"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
 
