@@ -11,7 +11,7 @@ SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 6379
 REPLICA_PORTS = [6380, 6381, 6382]     
 
-def wait_for_ready(host, port, timeout=5.0):
+def wait_for_ready(host, port, timeout=15.0):
     """Block until server responds to PING with +PONG."""
     start = time.time()
     while time.time() - start < timeout:
@@ -52,6 +52,9 @@ def _kill_container_replica(port=None):
 def _start_replica(port):
     """Generator: start replica on given port, yield, cleanup."""
     _kill_container_replica(port)
+    # Stagger replica starts — concurrent FULLRESYNC from the same master
+    # causes contention on slow CI runners (GitHub Actions shared VMs)
+    time.sleep(1.0)
     proc = subprocess.Popen(
         ["docker", "compose", "-f", "docker/docker-compose.yml",
         "exec", "-T", "redis-lite",
