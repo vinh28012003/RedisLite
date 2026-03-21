@@ -26,7 +26,7 @@ RUN cmake --build build
 FROM debian:trixie-slim
 
 # Only runtime dep — libstdc++ for C++ standard library
-RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 \
+RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 procps \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/build/redis-lite /usr/local/bin/redis-lite
