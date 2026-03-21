@@ -10,12 +10,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build redis-lite
-        run: docker compose -f docker/docker-compose.yml build
+      - name: Build redis-lite (builder stage for tests + final image)
+        run: |
+          docker build -f docker/Dockerfile --target builder -t redis-lite:builder .
+          docker compose -f docker/docker-compose.yml build
 
       - name: Run unit tests
         run: |
-          docker compose -f docker/docker-compose.yml run --rm redis-lite \
+          docker run --rm redis-lite:builder \
             ctest --test-dir build --output-on-failure
 
       - name: Run integration tests

@@ -1,33 +1,89 @@
 name: CD
 
-# Build production images on every merge to main.
-# Evolves into: build → push ECR → deploy EKS → post-deploy validation.
-
+# Triggers:
+# 1. Push to main (after PR merge) → tags with 'latest' + short SHA
+# 2. Version tag (v*) → tags with the version number
 on:
   push:
     branches: [main]
+    tags: ['v*']
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_SERVER: ghcr.io/${{ github.repository }}/redis-lite
+  IMAGE_CONTROLLER: ghcr.io/${{ github.repository }}/failover-ctl
 
 jobs:
-  build-images:
+  build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build redis-lite image
-        run: docker build -f docker/Dockerfile -t redis-lite:latest .
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build failover controller image
-        run: docker build -f controller/Dockerfile -t failover-ctl:latest .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Verify images created
+      # Compute image tags based on trigger type:
+      # main push → latest + sha-abc1234
+      # tag push  → v1.2.3
+      - name: Compute tags
+        id: tags
         run: |
-          docker images redis-lite:latest --format '{{.Repository}}:{{.Tag}} {{.Size}}'
-          docker images failover-ctl:latest --format '{{.Repository}}:{{.Tag}} {{.Size}}'
+          SHA_SHORT=$(echo "$SHA" | cut -c1-7)
+          if [[ "$REF" == refs/tags/v* ]]; then
+            VERSION="${REF#refs/tags/}"
+            echo "server_tags=$SERVER:$VERSION" >> "$GITHUB_OUTPUT"
+            echo "ctl_tags=$CTL:$VERSION" >> "$GITHUB_OUTPUT"
+          else
+            echo "server_tags=$SERVER:latest,$SERVER:sha-$SHA_SHORT" >> "$GITHUB_OUTPUT"
+            echo "ctl_tags=$CTL:latest,$CTL:sha-$SHA_SHORT" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          SERVER: ${{ env.IMAGE_SERVER }}
+          CTL: ${{ env.IMAGE_CONTROLLER }}
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
 
-      # Future steps (after Terraform/EKS):
-      # - name: Push to ECR
-      #   run: docker push $ECR_REGISTRY/redis-lite:$SHA
-      # - name: Deploy to EKS
-      #   run: kubectl rollout restart ...
-      # - name: Post-deploy validation
-      #   run: pytest tests/failover/ against live K8s
+      # Build + push redis-lite server (multi-stage, runtime image only)
+      - name: Build and push redis-lite
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.server_tags }}
+          cache-from: type=gha,scope=redis-lite
+          cache-to: type=gha,mode=max,scope=redis-lite
+
+      # Build + push failover controller  (multi-stage)
+      - name: Build and push failover-ctl
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: controller/Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.ctl_tags }}
+          cache-from: type=gha,scope=failover-ctl
+          cache-to: type=gha,mode=max,scope=failover-ctl
+
+      - name: Print pushed images
+        run: |
+          echo "Server tags: $SERVER_TAGS"
+          echo "Controller tags: CTL_TAGS"
+        env:
+          SERVER_TAGS: ${{ steps.tags.outputs.server_tags }}
+          CTL_TAGS: ${{ steps.tags.outputs.ctl_tags }}
+
+      # Future steps (Phase 8 — Terraform/EKS):
+      # - Deploy to EKS
+      # - Post-deploy validation
