@@ -87,4 +87,3 @@ jobs:
       # Future steps (Phase 8 — Terraform/EKS):
       # - Deploy to EKS
       # - Post-deploy validation
-gi
