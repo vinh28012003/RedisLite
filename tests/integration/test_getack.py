@@ -125,7 +125,7 @@ def fake_master_and_replica():
     proc = subprocess.Popen(
         ["docker", "compose", "-f", "docker/docker-compose.yml",
         "exec", "-T", "redis-lite",
-        "./build/redis-lite", "--port", str(REPLICA_PORT),
+        "redis-lite", "--port", str(REPLICA_PORT),
         "--replicaof", "host.docker.internal", str(FAKE_MASTER_PORT)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
