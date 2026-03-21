@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: redislite
+spec:
+  serviceName: redis-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis-lite:local
+          imagePullPolicy: Never
+          # Override the image's ENTRYPOINT to use the ConfigMap script,
+          # which decides master vs replica based on Pod ordinal.
+          command: ["/bin/sh", "/scripts/start.sh"]
+          ports:
+            - containerPort: 6379
+              name: redis
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: redis-config
+            items:
+              - key: start.sh
+                path: start.sh
+            defaultMode: 0755

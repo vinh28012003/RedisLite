@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: redislite
+data:
+  # Static node list for the failover controller.
+  # Must match StatefulSet replicas × headless Service name.
+  # Update this when scaling the StatefulSet.
+  REDIS_NODES: "redis-0.redis-headless:6379,redis-1.redis-headless:6379,redis-2.redis-headless:6379"
+
+  # Entrypoint script mounted into Redis Pods via volume.
+  # Checks Pod ordinal to decide master vs replica startup.
+  start.sh: |
+    #!/bin/sh
+    ORDINAL=${HOSTNAME##*-}
+    if [ "$ORDINAL" -eq 0 ]; then
+      exec redis-lite --port 6379
+    else
+      exec redis-lite --port 6379 --replicaof redis-0.redis-headless 6379
+    fi
