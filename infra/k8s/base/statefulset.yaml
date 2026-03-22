@@ -16,8 +16,7 @@ spec:
     spec:
       containers:
         - name: redis
-          image: redis-lite:local
-          imagePullPolicy: Never
+          image: ghcr.io/vinh28012003/redislite/redis-lite:latest
           # Override the image's ENTRYPOINT to use the ConfigMap script,
           # which decides master vs replica based on Pod ordinal.
           command: ["/bin/sh", "/scripts/start.sh"]
