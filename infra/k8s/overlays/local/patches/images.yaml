@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: redislite
+spec:
+  template:
+    spec:
+      containers:
+        - name: redis
+          image: redis-lite:local
+          imagePullPolicy: Never
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: failover-controller
+  namespace: redislite
+spec:
+  template:
+    spec:
+      containers:
+        - name: controller
+          image: failover-ctl:local
+          imagePullPolicy: Never

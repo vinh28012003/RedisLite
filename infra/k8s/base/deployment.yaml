@@ -15,8 +15,7 @@ spec:
     spec:
       containers:
         - name: controller
-          image: failover-ctl:local
-          imagePullPolicy: Never
+          image: ghcr.io/vinh28012003/redislite/failover-ctl:latest
           env:
             - name: REDIS_NODES
               valueFrom:
