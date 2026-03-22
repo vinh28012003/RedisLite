@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-headless
+  namespace: redislite
+spec:
+  # Headless Service: no ClusterIP, DNS returns individual Pod IPs.
+  # Each Pod gets a DNS record: redis-{i}.redis-headless.redislite.svc.cluster.local
+  clusterIP: None
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+      name: redis

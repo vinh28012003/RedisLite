@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: failover-controller
+  namespace: redislite
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: failover-controller
+  template:
+    metadata:
+      labels:
+        app: failover-controller
+    spec:
+      containers:
+        - name: controller
+          image: failover-ctl:local
+          imagePullPolicy: Never
+          env:
+            - name: REDIS_NODES
+              valueFrom:
+                configMapKeyRef:
+                  name: redis-config
+                  key: REDIS_NODES
