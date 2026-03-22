@@ -8,6 +8,26 @@ permissions:
   contents: read
 
 jobs:
+  validate-manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin kubeconform
+
+      - name: Validate base manifests
+        run: |
+          kubectl kustomize infra/k8s/base/ \
+            | kubeconform -strict -summary
+
+      - name: Validate local overlay
+        run: |
+          kubectl kustomize infra/k8s/overlays/local/ \
+            | kubeconform -strict -summary
+
   build-and-test-cpp:
     runs-on: ubuntu-latest
     steps:
