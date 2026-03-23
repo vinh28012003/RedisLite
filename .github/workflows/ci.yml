@@ -8,6 +8,41 @@ permissions:
   contents: read
 
 jobs:
+  validate-manifests:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'pull_request' && (
+        contains(join(github.event.pull_request.labels.*.name, ','), 'infra') ||
+        true
+      )
+    env:
+      KUBECONFORM_VERSION: "0.6.7"
+      KUBECONFORM_CHECKSUM: "95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73"
+      KUBERNETES_VERSION: "1.31.0"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install kubeconform
+        run: |
+          set -euo pipefail
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            -o kubeconform.tar.gz
+          echo "${KUBECONFORM_CHECKSUM}  kubeconform.tar.gz" | sha256sum --check
+          tar xz -C /usr/local/bin kubeconform < kubeconform.tar.gz
+          rm kubeconform.tar.gz
+
+      - name: Validate base manifests
+        run: |
+          set -euo pipefail
+          kubectl kustomize infra/k8s/base/ \
+            | kubeconform -strict -summary -kubernetes-version "${KUBERNETES_VERSION}"
+
+      - name: Validate local overlay
+        run: |
+          set -euo pipefail
+          kubectl kustomize infra/k8s/overlays/local/ \
+            | kubeconform -strict -summary -kubernetes-version "${KUBERNETES_VERSION}"
+
   build-and-test-cpp:
     runs-on: ubuntu-latest
     steps:
