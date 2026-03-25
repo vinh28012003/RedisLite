@@ -1,0 +1,27 @@
+# Patch: set imagePullPolicy to Always for AWS (pull from ECR).
+# Image URLs are injected at deploy time via:
+#   kustomize edit set image ghcr.io/vinh28012003/redislite/redis-lite=$(terraform output -raw ecr_redis_lite_url):latest
+#   kustomize edit set image ghcr.io/vinh28012003/redislite/failover-ctl=$(terraform output -raw ecr_failover_ctl_url):latest
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: redislite
+spec:
+  template:
+    spec:
+      containers:
+        - name: redis
+          imagePullPolicy: Always
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: failover-controller
+  namespace: redislite
+spec:
+  template:
+    spec:
+      containers:
+        - name: controller
+          imagePullPolicy: Always
