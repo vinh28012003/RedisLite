@@ -1,0 +1,16 @@
+# Terraform provider plugins (downloaded by `terraform init`)
+.terraform/
+
+# State files (stored in S3, but Terraform may cache locally)
+*.tfstate
+*.tfstate.backup
+
+# Lock file is committed — it pins exact provider versions
+# .terraform.lock.hcl  (DO commit this)
+
+# Variable override files that may contain secrets
+*.auto.tfvars
+
+# Crash logs
+crash.log
+crash.*.log
